@@ -12,6 +12,7 @@ Le paquet `@onoff/api-client` fournit au Web et au mobile l'ajout du jeton injec
 
 - `GET /health/live` et `GET /health/ready`; les deux réponses exposent `version`, lu depuis `apps/api/package.json` (version actuelle `0.1.0`).
 - `GET /v1/me`, `GET /v1/organizations`, `GET /v1/organizations/:orgId/lines`
+- `PUT` and `DELETE /v1/organizations/:orgId/lines/:lineId/assignments/:userId` require an active organization admin. Updates validate the target membership and line capabilities in a service-only transaction; revocation is soft, idempotent, and audited.
 - `GET /v1/organizations/:orgId/contacts?limit=&cursor=&q=` et `POST /v1/organizations/:orgId/contacts`
 - `GET/PATCH/DELETE /v1/contacts/:id` (suppression logique / archivage)
 - `GET/POST /v1/devices`, `PUT /v1/devices/:id/voice-state`, `POST /v1/devices/:id/revoke`

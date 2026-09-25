@@ -123,7 +123,8 @@ Fastify ne transporte pas l'audio. Le serveur reste l'autorité sur les droits e
 ### 1.1. Préparer les outils locaux
 
 - [x] Installer Git et créer le dépôt local avec branche principale `main`.
-- [ ] Créer ensuite un dépôt distant privé et ajouter son URL ; ne jamais y envoyer un `.env`.
+- [x] Créer le dépôt distant `Samsooon76/on-on`, ajouter l'URL `origin` et pousser le commit initial sur `main`; `.env` reste ignoré et hors de l'historique.
+- [ ] Confirmer si le dépôt doit être privé : il est actuellement public; choix demandé au propriétaire avant tout changement de visibilité.
 - [ ] Installer Node.js 24.21.0 LTS sur l'hôte et valider le dépôt avec ce runtime; le patch est épinglé dans `.nvmrc` et la CI.
 - [x] Partir de Node.js 24 LTS comme candidat à la date du plan, sous réserve de compatibilité avec la chaîne mobile retenue. [Versions Node.js](https://nodejs.org/en/about/previous-releases).
 - [x] Installer et fixer pnpm ; enregistrer sa version dans `packageManager`.
@@ -323,7 +324,7 @@ Proposition : les lectures métier passent par l'API avec un client Supabase por
 - [x] Restreindre les grants SQL de mutation et l'exécution des fonctions privilégiées pour `anon` et `authenticated`.
 - [x] Conserver `provider_events`, intentions sensibles et clés d'idempotence hors lecture client.
 - [ ] Regrouper toutes les écritures privilégiées dans des repositories/services explicitement nommés et testés.
-- [ ] Inclure l'organisation et la ligne dans les filtres serveur ; ne jamais charger une ressource uniquement par un ID fourni sans contrôle d'appartenance.
+- [x] Inclure l'organisation et la ligne dans les filtres serveur ; les accès par identifiant vérifient l'appartenance active, et l'historique exige une affectation active à la ligne. Tests API de scoping ajoutés.
 - [x] Utiliser des fonctions SQL transactionnelles restreintes au serveur pour réserver un appel ou traiter plusieurs écritures atomiques.
 - [x] Pour toute fonction `SECURITY DEFINER`, fixer le `search_path`, qualifier les tables et limiter les droits d'exécution.
 - [x] Tester l'accès direct avec le rôle `authenticated` sur une branche distante isolée: un membre A ne voit pas les données de B; contrôler aussi les refus de lecture anonyme et des événements fournisseur. Les requêtes HTTP avec vrais JWT restent dans la recette d'intégration.

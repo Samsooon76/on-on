@@ -5,7 +5,7 @@
 | Vérification | Résultat |
 |---|---|
 | `CI=true pnpm typecheck` | Tous les workspaces, dont le worker et le mobile, passent |
-| `CI=true pnpm test` | 29 tests réussis : 3 contrats, 4 tests de segmentation API client et 22 API; les adaptateurs voix, le worker, le web et le mobile n'ont pas encore de tests unitaires |
+| `CI=true pnpm test` | 33 tests réussis : 3 contrats, 4 tests de segmentation API client et 26 API; les adaptateurs voix, le worker, le web et le mobile n'ont pas encore de tests unitaires |
 | `CI=true pnpm lint` | Passe; le script de lint exécute le typecheck strict des workspaces |
 | `CI=true pnpm build` | API, worker, packages et Web passent; Vite produit le bundle production |
 | Worker | Compilation TypeScript réussie; reprise des appels à partir d'états persistés et backoff stocké en base; les appels Twilio réels ne sont pas configurés |
@@ -18,7 +18,7 @@
 | Mode maintenance | Revue statique: `OPERATIONS_PAUSED=true` renvoie `503 operations_paused` sur la création d'appel et de SMS; les clients affichent le message de réponse. Le mode ne termine pas les appels actifs. Pas d'essai runtime sur un serveur hébergé |
 | Métriques client vocales | Migration `20260925145647_voice_client_diagnostic_rate_limit` appliquée sur Supabase en ligne; l'opération `voice_client_diagnostic` est limitée à 10/5 min/utilisateur. Les permissions du RPC restent réservées à `service_role`. Les événements n'acceptent que des catégories, plateforme, version et durée bornée; le code client/API passe le typecheck. Aucun événement client réel n'a été émis pendant cette recette |
 
-Le workflow `.github/workflows/ci.yml` se déclenche sur les pull requests et les pushs vers `main`; il lance `lint`, `typecheck`, `test` et `build` sur tout le workspace. Un changement de package partagé passe donc par les contrôles de ses consommateurs. La configuration du workflow a été revue; les exécutions hébergées et un push vers un dépôt distant ne sont pas vérifiés ici.
+Le workflow `.github/workflows/ci.yml` se déclenche sur les pull requests et les pushs vers `main`; il lance `lint`, `typecheck`, `test` et `build` sur tout le workspace. Un changement de package partagé passe donc par les contrôles de ses consommateurs. La configuration a été revue et le commit initial a été poussé sur `main`; l'exécution hébergée de la CI reste à vérifier.
 
 Les migrations ont été vérifiées et appliquées uniquement au projet Supabase hébergé `mzqycbxnbyxeivdduhrl`; aucune instance Supabase locale n'a été démarrée ou utilisée.
 
@@ -137,10 +137,10 @@ La [matrice de support des plateformes](platform-support-matrix.md) sépare les 
 | Vérification | Résultat |
 |---|---|
 | API typecheck/build sous Node 24.19.0 | Passent après ajout du compilateur Zod et des schémas de réponses JSON `/v1` |
-| Tests API sous Node 24.19.0 | 22 réussis, 0 échec; en plus de la santé, de l'authentification, de CORS et des webhooks non signés, dix scénarios `POST /v1/messages` injectent Supabase et Twilio simulés pour vérifier le succès, les contenus français/Unicode longs, le refus de ligne non autorisée, le refus de destinataire exact et de préfixe pays, le refus définitif fournisseur, le timeout incertain, le rejeu sans second envoi, un callback anticipé et un callback dupliqué |
+| Tests API sous Node 24.19.0 | 26 réussis, 0 échec; en plus de la santé, de l'authentification, de CORS et des webhooks non signés, dix scénarios `POST /v1/messages` injectent Supabase et Twilio simulés pour vérifier le succès, les contenus français/Unicode longs, le refus de ligne non autorisée, le refus de destinataire exact et de préfixe pays, le refus définitif fournisseur, le timeout incertain, le rejeu sans second envoi, un callback anticipé et un callback dupliqué; deux tests vérifient l'isolation de l'historique; deux tests vérifient que seuls les admins peuvent affecter/révoquer une ligne via le repository privilégié |
 | Dépendance du pont Zod | `@fastify/type-provider-zod@1.0.0`, Fastify 5.12.5, Zod 4.5.4; versions et lockfile épinglés |
 | Contrats de sortie | Les routes API JSON ont une liste de champs sérialisés; les webhooks TwiML/XML et les réponses 204 conservent leur format sans corps JSON |
-| Relance monorepo après restauration des dépendances verrouillées | `pnpm test`, `pnpm lint`, `pnpm typecheck` et `pnpm build` passent sous Node 24.19.0 avec pnpm 11.9.0; les 29 tests non vides réussissent. Une première tentative sous Node 26 a été interrompue avant les tests, car ce runtime ne correspond pas aux engines déclarés |
+| Relance monorepo après restauration des dépendances verrouillées | `pnpm test`, `pnpm lint`, `pnpm typecheck` et `pnpm build` passent sous Node 24.19.0 avec pnpm 11.9.0; les 29 tests non vides réussissent à cette date. Une première tentative sous Node 26 a été interrompue avant les tests, car ce runtime ne correspond pas aux engines déclarés |
 | Supabase hébergé `onoffv2` | 25 migrations jusqu'à `20260925152637_restore_guarded_user_rpc_access`; 19/19 tables publiques ont RLS |
 | RPC métier authentifiés | Les quatre fonctions restent exécutables par `authenticated`, comme exigé par le JWT utilisateur transmis par les routes API; `anon` et `PUBLIC` ne sont pas accordés. Leurs contrôles d'identité, d'appartenance et d'affectation restent dans les fonctions SQL |
 
@@ -160,4 +160,4 @@ Une nouvelle lecture des catalogues PostgreSQL sur Supabase hébergé confirme R
 
 La suite pgTAP `supabase/tests/rls_isolation.test.sql` passe avec ses neuf assertions sur une branche Supabase distante isolée, sans données de production. Elle vérifie l'isolation des données de A face aux fixtures de B et les refus de lecture des événements fournisseur et des contacts par `anon`. La transaction annule les fixtures et la branche temporaire est supprimée. Cela valide le contexte Postgres simulé dans la suite; des requêtes HTTP avec deux vrais JWT restent à effectuer.
 
-Les commandes `CI=true pnpm test`, `pnpm lint`, `pnpm typecheck` et `pnpm build` passent sous Node 24.19.0 et pnpm 11.9.0. Les tests donnent 29 succès (3 contrats, 4 API client, 22 API), dont des cas simulés d'accents français, d'emoji, de messages GSM-7/Unicode longs, d'actions rapprochées, de callbacks dupliqués, de droits de ligne et d'allowlists exactes/pays. Les suites Web, Worker et adaptateurs vocaux sont encore vides. Expo natif, Twilio, comptes réels et déploiement hébergé ne sont pas couverts.
+Après l'ajout du contrôle d'affectation admin, `CI=true pnpm test`, `pnpm lint`, `pnpm typecheck` et `pnpm build` passent à nouveau sous Node 24.19.0 et pnpm 11.9.0 : 33 tests réussis (3 contrats, 4 API client, 26 API). Les tests SQL (21 assertions) pour le RPC d'affectation sont écrits mais attendent l'autorisation de créer une branche Supabase à 0,01344 $/heure. Les suites Web, Worker et adaptateurs vocaux sont encore vides. Expo natif, Twilio, comptes réels et déploiement hébergé ne sont pas couverts.

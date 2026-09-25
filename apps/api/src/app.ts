@@ -4,9 +4,11 @@ import { createHash, randomUUID } from "node:crypto";
 import twilio from "twilio";
 import { z } from "zod";
 import { hasZodFastifySchemaValidationErrors, serializerCompiler, validatorCompiler, type ZodTypeProvider } from "@fastify/type-provider-zod";
-import { callIntentCreateSchema, contactCreateSchema, contactUpdateSchema, deviceCreateSchema, messageCreateSchema, paginationSchema, uuidSchema, voiceTargetSchema, type Database } from "@onoff/contracts";
+import { callIntentCreateSchema, contactCreateSchema, contactUpdateSchema, deviceCreateSchema, lineAssignmentUpdateSchema, messageCreateSchema, paginationSchema, uuidSchema, voiceTargetSchema, type Database } from "@onoff/contracts";
 import type { AppConfig } from "./config.js";
 import { requestBodySchemas, responsesForRoute } from "./response-schemas.js";
+import { findAssignedLine, getActiveOrganizationIds, isActiveOrganizationAdmin } from "./repositories/access.js";
+import { persistLineAssignment } from "./repositories/line-assignments.js";
 import { createVoiceAccessToken } from "./voice.js";
 
 export type RequestContext = {
@@ -323,7 +325,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       request.log.warn({ code: error?.code, requestId: request.id, table: "contacts" }, "contact creation rejected");
       return reply.code(error?.code === "42501" ? 403 : 400).send({ code: "contact_not_created", message: "Le contact n'a pas pu être créé dans cette organisation.", requestId: request.id });
     }
-    const { data, error: readError } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").eq("id", contactId).single();
+    const { data, error: readError } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").eq("id", contactId).eq("organization_id", parsed.data.organizationId).single();
     if (readError || !data) return reply.code(201).send({ id: contactId });
     return reply.code(201).send(data);
   });
@@ -333,7 +335,11 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     const id = uuidSchema.safeParse(request.params.id);
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
     if (!id.success) return reply.code(400).send({ code: "invalid_request", message: "Identifiant de contact invalide.", requestId: request.id });
-    const { data, error } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").eq("id", id.data).is("archived_at", null).maybeSingle();
+    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
+    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
+    const organizationIds = organizationScope.data ?? [];
+    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
+    const { data, error } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").in("organization_id", organizationIds).eq("id", id.data).is("archived_at", null).maybeSingle();
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
     if (!data) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
     return data;
@@ -346,7 +352,11 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!id.success) return reply.code(400).send({ code: "invalid_request", message: "Identifiant de contact invalide.", requestId: request.id });
     const parsed = contactUpdateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ code: "invalid_contact", message: "Vérifiez les champs et la version du contact.", requestId: request.id });
-    const { data: existing, error: readError } = await context.supabase.from("contacts").select("id, organization_id").eq("id", id.data).is("archived_at", null).maybeSingle();
+    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
+    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
+    const organizationIds = organizationScope.data ?? [];
+    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
+    const { data: existing, error: readError } = await context.supabase.from("contacts").select("id, organization_id").in("organization_id", organizationIds).eq("id", id.data).is("archived_at", null).maybeSingle();
     if (readError || !existing) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
     const { data: updatedId, error } = await context.supabase.rpc("update_contact_with_phones", {
       p_contact_id: id.data,
@@ -358,7 +368,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     });
     if (error) return reply.code(error.code === "42501" ? 403 : 503).send({ code: "contact_not_updated", message: "Le contact n'a pas pu être modifié.", requestId: request.id });
     if (!updatedId) return reply.code(409).send({ code: "version_conflict", message: "Ce contact a été modifié ailleurs. Actualisez la fiche puis réessayez.", requestId: request.id });
-    const { data } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").eq("id", updatedId).single();
+    const { data } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").eq("organization_id", existing.organization_id).eq("id", updatedId).single();
     return data ?? { id: updatedId };
   });
 
@@ -367,7 +377,11 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     const id = uuidSchema.safeParse(request.params.id);
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
     if (!id.success) return reply.code(400).send({ code: "invalid_request", message: "Identifiant de contact invalide.", requestId: request.id });
-    const { data, error } = await context.supabase.from("contacts").update({ archived_at: new Date().toISOString() }).eq("id", id.data).is("archived_at", null).select("id").maybeSingle();
+    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
+    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
+    const organizationIds = organizationScope.data ?? [];
+    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
+    const { data, error } = await context.supabase.from("contacts").update({ archived_at: new Date().toISOString() }).in("organization_id", organizationIds).eq("id", id.data).is("archived_at", null).select("id").maybeSingle();
     if (error) return reply.code(503).send({ code: "contact_not_archived", message: "Le contact n'a pas pu être archivé.", requestId: request.id });
     if (!data) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
     return reply.code(204).send();
@@ -376,7 +390,11 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
   routes.get("/v1/devices", async (request, reply) => {
     const context = request.context;
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
-    const { data, error } = await context.supabase.from("devices").select("id, organization_id, platform, label, status, last_active_at, created_at").eq("user_id", context.userId).order("created_at", { ascending: false }).limit(50);
+    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
+    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Les appareils ne sont pas disponibles.", requestId: request.id });
+    const organizationIds = organizationScope.data ?? [];
+    if (!organizationIds.length) return { items: [] };
+    const { data, error } = await context.supabase.from("devices").select("id, organization_id, platform, label, status, last_active_at, created_at").in("organization_id", organizationIds).eq("user_id", context.userId).order("created_at", { ascending: false }).limit(50);
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "Les appareils ne sont pas disponibles.", requestId: request.id });
     return { items: data ?? [] };
   });
@@ -718,6 +736,71 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     return { items: data };
   });
 
+  routes.put<{ Params: { orgId: string; lineId: string; userId: string } }>("/v1/organizations/:orgId/lines/:lineId/assignments/:userId", async (request, reply) => {
+    const context = request.context;
+    const orgId = uuidSchema.safeParse(request.params.orgId);
+    const lineId = uuidSchema.safeParse(request.params.lineId);
+    const userId = uuidSchema.safeParse(request.params.userId);
+    const parsed = lineAssignmentUpdateSchema.safeParse(request.body);
+    if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
+    if (!orgId.success || !lineId.success || !userId.success || !parsed.success) {
+      return reply.code(400).send({ code: "invalid_assignment", message: "L'organisation, la ligne, le membre ou les droits sont invalides.", requestId: request.id });
+    }
+    const admin = await isActiveOrganizationAdmin(context.supabase, context.userId, orgId.data);
+    if (admin.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "L'affectation de ligne n'est pas disponible.", requestId: request.id });
+    if (!admin.data) return reply.code(403).send({ code: "assignment_forbidden", message: "Seul un administrateur actif peut affecter une ligne.", requestId: request.id });
+    if (!serviceSupabase) return reply.code(503).send({ code: "assignment_unavailable", message: "L'affectation de ligne n'est pas configurée.", requestId: request.id });
+
+    const assignment = await persistLineAssignment(serviceSupabase, {
+      organizationId: orgId.data,
+      lineId: lineId.data,
+      userId: userId.data,
+      actorId: context.userId,
+      canVoice: parsed.data.canVoice,
+      canSms: parsed.data.canSms,
+      revoke: false,
+    });
+    if (assignment.errorCode) {
+      request.log.warn({ code: assignment.errorCode, requestId: request.id, organizationId: orgId.data, lineId: lineId.data }, "line assignment update failed");
+      const status = assignment.errorCode === "42501" ? 403 : assignment.errorCode === "23503" ? 404 : assignment.errorCode === "22023" ? 400 : 503;
+      return reply.code(status).send({ code: "assignment_not_updated", message: "L'affectation n'a pas pu être mise à jour.", requestId: request.id });
+    }
+    if (!assignment.id) return reply.code(404).send({ code: "assignment_target_not_found", message: "La ligne ou le membre est introuvable ou inactif.", requestId: request.id });
+    request.log.info({ requestId: request.id, actorUserId: context.userId, organizationId: orgId.data, lineId: lineId.data, targetUserId: userId.data, assignmentId: assignment.id }, "line assignment updated");
+    return { id: assignment.id, status: "active" as const };
+  });
+
+  routes.delete<{ Params: { orgId: string; lineId: string; userId: string } }>("/v1/organizations/:orgId/lines/:lineId/assignments/:userId", async (request, reply) => {
+    const context = request.context;
+    const orgId = uuidSchema.safeParse(request.params.orgId);
+    const lineId = uuidSchema.safeParse(request.params.lineId);
+    const userId = uuidSchema.safeParse(request.params.userId);
+    if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
+    if (!orgId.success || !lineId.success || !userId.success) return reply.code(400).send({ code: "invalid_assignment", message: "L'organisation, la ligne ou le membre est invalide.", requestId: request.id });
+    const admin = await isActiveOrganizationAdmin(context.supabase, context.userId, orgId.data);
+    if (admin.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "L'affectation de ligne n'est pas disponible.", requestId: request.id });
+    if (!admin.data) return reply.code(403).send({ code: "assignment_forbidden", message: "Seul un administrateur actif peut révoquer une affectation.", requestId: request.id });
+    if (!serviceSupabase) return reply.code(503).send({ code: "assignment_unavailable", message: "L'affectation de ligne n'est pas configurée.", requestId: request.id });
+
+    const assignment = await persistLineAssignment(serviceSupabase, {
+      organizationId: orgId.data,
+      lineId: lineId.data,
+      userId: userId.data,
+      actorId: context.userId,
+      canVoice: false,
+      canSms: false,
+      revoke: true,
+    });
+    if (assignment.errorCode) {
+      request.log.warn({ code: assignment.errorCode, requestId: request.id, organizationId: orgId.data, lineId: lineId.data }, "line assignment revocation failed");
+      const status = assignment.errorCode === "42501" ? 403 : assignment.errorCode === "23503" ? 404 : assignment.errorCode === "22023" ? 400 : 503;
+      return reply.code(status).send({ code: "assignment_not_revoked", message: "L'affectation n'a pas pu être révoquée.", requestId: request.id });
+    }
+    if (!assignment.id) return reply.code(404).send({ code: "assignment_not_found", message: "L'affectation est introuvable.", requestId: request.id });
+    request.log.info({ requestId: request.id, actorUserId: context.userId, organizationId: orgId.data, lineId: lineId.data, targetUserId: userId.data, assignmentId: assignment.id }, "line assignment revoked");
+    return { id: assignment.id, status: "revoked" as const };
+  });
+
   routes.get<{ Params: { lineId: string }; Querystring: { limit?: string; cursor?: string } }>("/v1/lines/:lineId/calls", async (request, reply) => {
     const context = request.context;
     const lineId = uuidSchema.safeParse(request.params.lineId);
@@ -726,7 +809,10 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!lineId.success || !page.success) return reply.code(400).send({ code: "invalid_request", message: "Ligne ou pagination invalide.", requestId: request.id });
     const cursor = decodeCursor(page.data.cursor);
     if (cursor === false) return reply.code(400).send({ code: "invalid_request", message: "Curseur invalide.", requestId: request.id });
-    let query = context.supabase.from("calls").select("id, organization_id, line_id, direction, remote_number, status, started_at, answered_at, ended_at, duration_seconds, created_at").eq("line_id", lineId.data).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(page.data.limit + 1);
+    const scope = await findAssignedLine(context.supabase, context.userId, lineId.data, "can_voice");
+    if (scope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "L'historique n'est pas disponible.", requestId: request.id });
+    if (!scope.data) return reply.code(404).send({ code: "not_found", message: "Ligne introuvable.", requestId: request.id });
+    let query = context.supabase.from("calls").select("id, organization_id, line_id, direction, remote_number, status, started_at, answered_at, ended_at, duration_seconds, created_at").eq("organization_id", scope.data.organizationId).eq("line_id", scope.data.lineId).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(page.data.limit + 1);
     if (cursor) query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
     const { data, error } = await query;
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "L'historique n'est pas disponible.", requestId: request.id });
@@ -755,9 +841,12 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!lineId.success || !page.success) return reply.code(400).send({ code: "invalid_request", message: "Ligne ou pagination invalide.", requestId: request.id });
     const cursor = decodeCursor(page.data.cursor);
     if (cursor === false) return reply.code(400).send({ code: "invalid_request", message: "Curseur invalide.", requestId: request.id });
+    const scope = await findAssignedLine(context.supabase, context.userId, lineId.data, "can_sms");
+    if (scope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Les conversations ne sont pas disponibles.", requestId: request.id });
+    if (!scope.data) return reply.code(404).send({ code: "not_found", message: "Ligne introuvable.", requestId: request.id });
     let query = context.supabase.from("conversations").select("id, organization_id, line_id, remote_number, last_message_at")
       .not("last_message_at", "is", null)
-      .eq("line_id", lineId.data).order("last_message_at", { ascending: false, nullsFirst: false })
+      .eq("organization_id", scope.data.organizationId).eq("line_id", scope.data.lineId).order("last_message_at", { ascending: false, nullsFirst: false })
       .order("id", { ascending: false }).limit(page.data.limit + 1);
     if (cursor) query = query.or(`last_message_at.lt.${cursor.createdAt},and(last_message_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
     const { data, error } = await query;
@@ -813,12 +902,19 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!conversationId.success || !page.success) return reply.code(400).send({ code: "invalid_request", message: "Conversation ou pagination invalide.", requestId: request.id });
     const cursor = decodeCursor(page.data.cursor);
     if (cursor === false) return reply.code(400).send({ code: "invalid_request", message: "Curseur invalide.", requestId: request.id });
+    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
+    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
+    const organizationIds = organizationScope.data ?? [];
+    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
     const { data: conversation, error: conversationError } = await context.supabase.from("conversations")
-      .select("id, organization_id, line_id, remote_number").eq("id", conversationId.data).maybeSingle();
+      .select("id, organization_id, line_id, remote_number").in("organization_id", organizationIds).eq("id", conversationId.data).maybeSingle();
     if (conversationError) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
     if (!conversation) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
+    const lineScope = await findAssignedLine(context.supabase, context.userId, conversation.line_id, "can_sms");
+    if (lineScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
+    if (!lineScope.data || lineScope.data.organizationId !== conversation.organization_id) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
     let query = context.supabase.from("messages").select("id, conversation_id, direction, body, status, provider_error_code, created_at, sent_at, delivered_at")
-      .eq("conversation_id", conversation.id).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(page.data.limit + 1);
+      .eq("organization_id", conversation.organization_id).eq("conversation_id", conversation.id).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(page.data.limit + 1);
     if (cursor) query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
     const { data, error } = await query;
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "Les messages ne sont pas disponibles.", requestId: request.id });
@@ -837,11 +933,18 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!conversationId.success || (lastReadMessageId !== null && !lastReadMessageId.success)) {
       return reply.code(400).send({ code: "invalid_request", message: "Conversation ou message invalide.", requestId: request.id });
     }
-    const { data: conversation } = await context.supabase.from("conversations").select("id, organization_id").eq("id", conversationId.data).maybeSingle();
+    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
+    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
+    const organizationIds = organizationScope.data ?? [];
+    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
+    const { data: conversation } = await context.supabase.from("conversations").select("id, organization_id, line_id").in("organization_id", organizationIds).eq("id", conversationId.data).maybeSingle();
     if (!conversation) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
+    const lineScope = await findAssignedLine(context.supabase, context.userId, conversation.line_id, "can_sms");
+    if (lineScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "L'état de lecture n'a pas pu être enregistré.", requestId: request.id });
+    if (!lineScope.data || lineScope.data.organizationId !== conversation.organization_id) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
     const messageId = lastReadMessageId?.success ? lastReadMessageId.data : null;
     if (messageId) {
-      const { data: message } = await context.supabase.from("messages").select("id").eq("id", messageId).eq("conversation_id", conversation.id).maybeSingle();
+      const { data: message } = await context.supabase.from("messages").select("id").eq("organization_id", conversation.organization_id).eq("id", messageId).eq("conversation_id", conversation.id).maybeSingle();
       if (!message) return reply.code(400).send({ code: "invalid_request", message: "Le message n'appartient pas à cette conversation.", requestId: request.id });
     }
     const { error } = await context.supabase.from("conversation_reads").upsert({

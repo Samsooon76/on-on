@@ -50,11 +50,19 @@ export const deviceCreateSchema = z.object({
   label: z.string().trim().min(1).max(80),
 });
 
+export const lineAssignmentUpdateSchema = z.object({
+  canVoice: z.boolean(),
+  canSms: z.boolean(),
+}).refine(({ canVoice, canSms }) => canVoice || canSms, {
+  message: "Une affectation doit autoriser la voix ou les SMS.",
+});
+
 export type Organization = z.infer<typeof organizationSchema>;
 export type Line = z.infer<typeof lineSchema>;
 export type ContactCreate = z.infer<typeof contactCreateSchema>;
 export type ContactUpdate = z.infer<typeof contactUpdateSchema>;
 export type DeviceCreate = z.infer<typeof deviceCreateSchema>;
+export type LineAssignmentUpdate = z.infer<typeof lineAssignmentUpdateSchema>;
 
 export const voiceTargetSchema = z.object({
   organizationId: uuidSchema,

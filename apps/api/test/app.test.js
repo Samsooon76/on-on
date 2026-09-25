@@ -87,6 +87,155 @@ test("device voice-state changes reject requests without a bearer token", async 
   assert.equal(response.json().code, "unauthorized");
 });
 
+function createLineHistoryDependencies({ assigned = true } = {}) {
+  const userId = "00000000-0000-4000-8000-000000000010";
+  const organizationId = "00000000-0000-4000-8000-000000000001";
+  const lineId = "00000000-0000-4000-8000-000000000002";
+  const queries = [];
+  const dependencies = {
+    createSupabaseClient: () => ({
+      auth: { getUser: async () => ({ data: { user: { id: userId, is_anonymous: false } }, error: null }) },
+      from: (table) => {
+        const queryInfo = { table, filters: [] };
+        queries.push(queryInfo);
+        const query = {
+          select: (columns) => { queryInfo.columns = columns; return query; },
+          eq: (column, value) => { queryInfo.filters.push(["eq", column, value]); return query; },
+          in: (column, value) => { queryInfo.filters.push(["in", column, value]); return query; },
+          order: () => query,
+          limit: () => query,
+          or: () => query,
+          maybeSingle: async () => ({
+            data: table === "line_assignments" && assigned
+              ? { organization_id: organizationId, line_id: lineId }
+              : null,
+            error: null,
+          }),
+          then: (resolve, reject) => Promise.resolve({
+            data: table === "memberships" ? [{ organization_id: organizationId }] : [],
+            error: null,
+          }).then(resolve, reject),
+        };
+        return query;
+      },
+    }),
+  };
+  return { dependencies, queries, organizationId, lineId };
+}
+
+test("call history queries require the member organization and assigned voice line", async (t) => {
+  const mocked = createLineHistoryDependencies();
+  const app = createApp(config, mocked.dependencies);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/v1/lines/${mocked.lineId}/calls`,
+    headers: { authorization: "Bearer test-user-token" },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().items, []);
+  const membershipQuery = mocked.queries.find(({ table }) => table === "memberships");
+  assert.ok(membershipQuery.filters.some(([kind, column]) => kind === "eq" && column === "user_id"));
+  assert.ok(membershipQuery.filters.some(([kind, column, value]) => kind === "eq" && column === "status" && value === "active"));
+  const assignmentQuery = mocked.queries.find(({ table }) => table === "line_assignments");
+  assert.ok(assignmentQuery.filters.some(([kind, column, value]) => kind === "in" && column === "organization_id" && value.includes(mocked.organizationId)));
+  assert.ok(assignmentQuery.filters.some(([kind, column, value]) => kind === "eq" && column === "line_id" && value === mocked.lineId));
+  assert.ok(assignmentQuery.filters.some(([kind, column, value]) => kind === "eq" && column === "can_voice" && value === true));
+  const callsQuery = mocked.queries.find(({ table }) => table === "calls");
+  assert.ok(callsQuery.filters.some(([kind, column, value]) => kind === "eq" && column === "organization_id" && value === mocked.organizationId));
+  assert.ok(callsQuery.filters.some(([kind, column, value]) => kind === "eq" && column === "line_id" && value === mocked.lineId));
+});
+
+test("call history does not query a line without an active voice assignment", async (t) => {
+  const mocked = createLineHistoryDependencies({ assigned: false });
+  const app = createApp(config, mocked.dependencies);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/v1/lines/${mocked.lineId}/calls`,
+    headers: { authorization: "Bearer test-user-token" },
+  });
+
+  assert.equal(response.statusCode, 404);
+  assert.equal(mocked.queries.some(({ table }) => table === "calls"), false);
+});
+
+function createLineAssignmentDependencies({ actorRole = "admin" } = {}) {
+  const userId = "00000000-0000-4000-8000-000000000010";
+  const organizationId = "00000000-0000-4000-8000-000000000001";
+  const lineId = "00000000-0000-4000-8000-000000000002";
+  const targetUserId = "00000000-0000-4000-8000-000000000011";
+  const assignmentId = "00000000-0000-4000-8000-000000000012";
+  const rpcCalls = [];
+  const dependencies = {
+    createSupabaseClient: (_url, key) => {
+      if (key === "test-service-key") return {
+        rpc: async (name, args) => {
+          rpcCalls.push({ name, args });
+          return { data: assignmentId, error: null };
+        },
+      };
+      return {
+        auth: { getUser: async () => ({ data: { user: { id: userId, is_anonymous: false } }, error: null }) },
+        from: (table) => {
+          assert.equal(table, "memberships");
+          const query = { filters: [] };
+          query.select = () => query;
+          query.eq = (column, value) => { query.filters.push([column, value]); return query; };
+          query.maybeSingle = async () => {
+            assert.deepEqual(query.filters, [
+              ["organization_id", organizationId],
+              ["user_id", userId],
+              ["status", "active"],
+            ]);
+            return { data: actorRole ? { role: actorRole } : null, error: null };
+          };
+          return query;
+        },
+      };
+    },
+  };
+  return { configWithService: { ...config, SUPABASE_SECRET_KEY: "test-service-key" }, dependencies, rpcCalls, organizationId, lineId, targetUserId, assignmentId };
+}
+
+test("only an active organization admin can assign and revoke a line", async (t) => {
+  const mocked = createLineAssignmentDependencies();
+  const app = createApp(mocked.configWithService, mocked.dependencies);
+  t.after(() => app.close());
+  const url = `/v1/organizations/${mocked.organizationId}/lines/${mocked.lineId}/assignments/${mocked.targetUserId}`;
+  const headers = { authorization: "Bearer test-user-token" };
+
+  const assigned = await app.inject({ method: "PUT", url, headers, payload: { canVoice: true, canSms: false } });
+  assert.equal(assigned.statusCode, 200);
+  assert.deepEqual(assigned.json(), { id: mocked.assignmentId, status: "active" });
+  const revoked = await app.inject({ method: "DELETE", url, headers });
+  assert.equal(revoked.statusCode, 200);
+  assert.deepEqual(revoked.json(), { id: mocked.assignmentId, status: "revoked" });
+  assert.deepEqual(mocked.rpcCalls.map(({ name, args }) => [name, args.p_org_id, args.p_line_id, args.p_user_id, args.p_actor_id, args.p_revoke]), [
+    ["set_line_assignment", mocked.organizationId, mocked.lineId, mocked.targetUserId, "00000000-0000-4000-8000-000000000010", false],
+    ["set_line_assignment", mocked.organizationId, mocked.lineId, mocked.targetUserId, "00000000-0000-4000-8000-000000000010", true],
+  ]);
+});
+
+test("organization members cannot call the privileged line assignment repository", async (t) => {
+  const mocked = createLineAssignmentDependencies({ actorRole: "member" });
+  const app = createApp(mocked.configWithService, mocked.dependencies);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "PUT",
+    url: `/v1/organizations/${mocked.organizationId}/lines/${mocked.lineId}/assignments/${mocked.targetUserId}`,
+    headers: { authorization: "Bearer test-user-token" },
+    payload: { canVoice: true, canSms: true },
+  });
+
+  assert.equal(response.statusCode, 403);
+  assert.equal(mocked.rpcCalls.length, 0);
+});
+
 test("CORS only reflects configured origins", async (t) => {
   const app = createApp(config);
   t.after(() => app.close());

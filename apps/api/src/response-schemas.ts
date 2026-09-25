@@ -6,6 +6,7 @@ import {
   e164Schema,
   errorResponseSchema,
   messageCreateSchema,
+  lineAssignmentUpdateSchema,
   uuidSchema,
   voiceTargetSchema,
 } from "@onoff/contracts";
@@ -134,6 +135,7 @@ export const requestBodySchemas = new Map<string, z.ZodType>([
   ["POST /v1/organizations/:orgId/contacts", contactCreateSchema.omit({ organizationId: true })],
   ["PATCH /v1/contacts/:id", contactUpdateSchema],
   ["POST /v1/devices", deviceCreateSchema],
+  ["PUT /v1/organizations/:orgId/lines/:lineId/assignments/:userId", lineAssignmentUpdateSchema],
   ["PUT /v1/devices/:id/voice-state", z.object({ registered: z.boolean() })],
   ["POST /v1/voice/token", voiceTargetSchema],
   ["POST /v1/call-intents", callIntentCreateSchema],
@@ -189,6 +191,8 @@ export const successResponseSchemas = new Map<string, Record<number, z.ZodType>>
       ]),
     })) }),
   }],
+  ["PUT /v1/organizations/:orgId/lines/:lineId/assignments/:userId", { 200: z.object({ id: uuidSchema, status: z.literal("active") }) }],
+  ["DELETE /v1/organizations/:orgId/lines/:lineId/assignments/:userId", { 200: z.object({ id: uuidSchema, status: z.literal("revoked") }) }],
   ["GET /v1/lines/:lineId/calls", { 200: z.object({ items: z.array(callResponseSchema), nextCursor: z.string().nullable() }) }],
   ["GET /v1/lines/:lineId/conversations", {
     200: z.object({ items: z.array(z.object({

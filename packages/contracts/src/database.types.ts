@@ -1048,6 +1048,18 @@ export type Database = {
         Args: { p_device_id: string; p_registered: boolean }
         Returns: boolean
       }
+      set_line_assignment: {
+        Args: {
+          p_actor_id: string
+          p_can_sms: boolean
+          p_can_voice: boolean
+          p_line_id: string
+          p_org_id: string
+          p_revoke: boolean
+          p_user_id: string
+        }
+        Returns: string
+      }
       update_contact_with_phones: {
         Args: {
           p_contact_id: string
