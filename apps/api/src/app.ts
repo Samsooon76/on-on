@@ -220,13 +220,15 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
         headers: { apikey: config.SUPABASE_PUBLISHABLE_KEY },
         signal: AbortSignal.timeout(2500),
       }).catch(() => null),
-      fetch(`${config.SUPABASE_URL}/rest/v1/`, {
+      fetch(`${config.SUPABASE_URL}/rest/v1/organizations?select=id&limit=0`, {
         headers: { apikey: config.SUPABASE_PUBLISHABLE_KEY },
         signal: AbortSignal.timeout(2500),
       }).catch(() => null),
     ]);
     const auth = authResponse?.ok === true;
-    const database = databaseResponse?.ok === true;
+    // PostgREST's OpenAPI root requires an admin key; any non-5xx reply from a
+    // zero-row table probe confirms the database API is reachable.
+    const database = databaseResponse !== null && databaseResponse.status < 500;
     const ready = auth && database;
     if (!ready) reply.code(503);
     return { status: ready ? "ready" : "unavailable", version: config.API_VERSION, dependencies: { auth, database } };
