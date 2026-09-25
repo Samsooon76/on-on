@@ -1,10 +1,10 @@
 # Déploiement de démonstration sur Railway
 
-L'application est préparée pour deux services Railway construits depuis la racine du monorepo. Le dépôt cible `Samsooon76/on-on` a été fourni, mais n'a pas pu être lu ni configuré comme remote : la résolution DNS de `github.com` échoue dans cet environnement, le jeton `gh` présent est invalide et le dossier `.git` du checkout est en lecture seule. Aucun service Onoff n'a été créé; les deux projets Railway visibles (`soothing-peace` et `compassionate-patience`) ne correspondent pas à ce dépôt.
+Le projet Railway privé `onoffv2` a été créé dans l'espace personnel `Hugo Samson's Projects` (ID `bcf5f5a8-4a85-4f5a-bf97-26ffd7cb9155`) avec l'environnement `production` (ID `862837d5-580b-4602-adc6-b8f831e84347`). Il ne contient encore aucun service ni déploiement. Le dépôt cible est `Samsooon76/on-on`; son intégration GitHub doit être reliée dans Railway avant le premier déploiement.
 
-Railway exige que le dépôt GitHub soit connecté à son intégration pour le premier déploiement. Une fois l'accès rétabli, connecter `Samsooon76/on-on` avant de lancer `railway_create_deployment`; ne pas sélectionner un autre dépôt ni réutiliser un projet existant. Après création du service, régler son répertoire racine sur `/` pour conserver le contexte pnpm du monorepo.
+Railway exige que le dépôt GitHub soit connecté à son intégration pour le premier déploiement. Relier `Samsooon76/on-on` au projet `onoffv2` avant de créer les services; ne pas sélectionner un autre dépôt ni réutiliser un projet existant. Régler le répertoire racine sur `/` pour conserver le contexte pnpm du monorepo.
 
-## Services
+## Services à créer dans le projet existant
 
 ### API
 
@@ -62,11 +62,11 @@ VITE_SUPABASE_PUBLISHABLE_KEY=<clé-publishable-du-projet-demo>
 
 Les origines Web et API doivent correspondre exactement aux domaines Railway obtenus. Après génération des domaines, synchroniser `API_PUBLIC_URL`, `WEB_PUBLIC_URL`, `ALLOWED_ORIGINS`, les URLs Auth Supabase et les webhooks Twilio avant le smoke test.
 
-## Procédure après rétablissement de l'accès GitHub
+## Procédure de déploiement
 
-1. Relier le dépôt confirmé `Samsooon76/on-on` à Railway et choisir la branche de livraison.
-2. Créer un **nouveau** projet Railway de démonstration, puis relier deux services au même dépôt et à la branche, racine `/`.
-3. Poser les commandes build/start et healthchecks ci-dessus; générer un domaine public pour les deux services.
+1. Relier le dépôt confirmé `Samsooon76/on-on` à Railway et choisir la branche `main`.
+2. Dans le projet `onoffv2` existant, créer trois services (API, Web, worker) depuis le même dépôt et la même branche, racine `/`.
+3. Poser les commandes build/start et healthchecks ci-dessus; générer des domaines publics seulement pour l'API et le Web, laisser le worker privé.
 4. Créer/choisir le projet Supabase de démonstration et configurer Auth, puis appliquer ses migrations contrôlées avant d'ajouter les utilisateurs de test.
 5. Définir les variables de secrets dans Railway, laisser voix/SMS coupés, puis déployer et vérifier les healthchecks.
 6. Configurer exactement les domaines dans Supabase Auth, CORS et Twilio; activer les services seulement après rotation des anciennes clés, limites de coûts et validation des destinataires.
