@@ -1,0 +1,24 @@
+{
+  "name": "onoffv2",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-web build && pnpm --parallel --filter @onoff/api --filter @onoff/web dev",
+    "build": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm --filter @onoff/web build && pnpm --filter @onoff/worker build",
+    "lint": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm -r lint",
+    "typecheck": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm -r typecheck",
+    "test": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm -r test",
+    "db:migrations:online": "pnpm exec supabase migration list --project-ref mzqycbxnbyxeivdduhrl",
+    "db:push:online": "pnpm exec supabase db push --project-ref mzqycbxnbyxeivdduhrl",
+    "db:types:online": "pnpm exec supabase gen types typescript --project-id mzqycbxnbyxeivdduhrl > packages/contracts/src/database.types.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "supabase": "2.117.0",
+    "tsx": "4.20.6",
+    "typescript": "6.0.3"
+  }
+}

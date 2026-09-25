@@ -1,0 +1,2 @@
+create index message_reconciliation_tasks_org_message_idx
+  on public.message_reconciliation_tasks(organization_id, message_id);

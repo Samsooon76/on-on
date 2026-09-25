@@ -1,0 +1,29 @@
+project_id = "onoffv2"
+
+[api]
+enabled = true
+port = 54331
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 500
+
+[db]
+port = 54332
+shadow_port = 54330
+major_version = 17
+
+[studio]
+enabled = true
+port = 54333
+
+[inbucket]
+enabled = true
+port = 54334
+smtp_port = 54335
+pop3_port = 54336
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173/**"]
+enable_signup = false

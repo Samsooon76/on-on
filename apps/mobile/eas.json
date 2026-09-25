@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "channel": "development",
+      "env": {
+        "APP_VARIANT": "dev"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "demo",
+      "env": {
+        "APP_VARIANT": "demo"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "channel": "production",
+      "env": {
+        "APP_VARIANT": "demo"
+      }
+    }
+  }
+}

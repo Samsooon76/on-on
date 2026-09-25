@@ -1,0 +1,23 @@
+{
+  "name": "@onoff/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@onoff/api": "workspace:*",
+    "@onoff/contracts": "workspace:*",
+    "@supabase/supabase-js": "2.117.1",
+    "twilio": "6.1.1"
+  },
+  "devDependencies": {
+    "tsx": "4.20.6"
+  }
+}
