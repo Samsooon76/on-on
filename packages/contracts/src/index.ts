@@ -5,6 +5,25 @@ export type { Database, Json } from "./database.types.js";
 export const uuidSchema = z.string().uuid();
 export const e164Schema = z.string().regex(/^\+[1-9]\d{7,14}$/, "Numéro E.164 invalide");
 
+/** Normalize formatted international numbers and French national numbers to E.164. */
+export function normalizePhoneNumber(input: string): string | null {
+  const value = input.trim();
+  if (!value || value.length > 64 || !/^[+0-9\s().-]+$/.test(value)) return null;
+
+  const compact = value.replace(/[\s().-]/g, "");
+  if ((compact.match(/\+/g)?.length ?? 0) > 1 || (compact.includes("+") && !compact.startsWith("+"))) return null;
+
+  let candidate: string;
+  if (compact.startsWith("+")) candidate = compact;
+  else if (compact.startsWith("00")) candidate = `+${compact.slice(2)}`;
+  else if (/^0[1-9]\d{8}$/.test(compact)) candidate = `+33${compact.slice(1)}`;
+  else return null;
+
+  if (candidate.startsWith("+330")) candidate = `+33${candidate.slice(4)}`;
+
+  return e164Schema.safeParse(candidate).success ? candidate : null;
+}
+
 export const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
   cursor: z.string().optional(),

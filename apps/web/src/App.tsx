@@ -1,6 +1,7 @@
 import { createClient, type Session } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import webPackage from "../package.json";
+import { normalizePhoneNumber } from "@onoff/contracts";
 import { ApiClientError, createApiClient, getSmsSegmentInfo } from "@onoff/api-client";
 import { createVoiceClient, type VoiceEvent } from "@onoff/voice-web";
 import type { VoiceClient } from "@onoff/voice-contract";
@@ -20,6 +21,15 @@ type Conversation = { id: string; lineId: string; remoteNumber: string; remoteCo
 type MessageRecord = { id: string; direction: "inbound" | "outbound"; body: string; status: string; provider_error_code: string | null; created_at: string; sent_at: string | null; delivered_at: string | null };
 type DeviceRecord = { id: string; organization_id: string; platform: string; label: string; status: string; last_active_at: string | null; created_at: string };
 type VoiceDiagnosticEvent = "voice_registration_failed" | "history_refresh_succeeded" | "history_refresh_failed";
+
+function takeCallDraftFromUrl(): string {
+  const url = new URL(window.location.href);
+  const value = url.searchParams.get("callTo");
+  if (value === null) return "";
+  url.searchParams.delete("callTo");
+  window.history.replaceState(window.history.state, "", url);
+  return normalizePhoneNumber(value) ?? "";
+}
 
 function ContactPanel(props: {
   contacts: Contact[];
@@ -41,7 +51,7 @@ function ContactPanel(props: {
   onCall(contact: Contact): void;
   onMessage(contact: Contact): void;
 }) {
-  const normalizedPhone = props.phone.trim().replace(/[\s().-]/g, "");
+  const normalizedPhone = normalizePhoneNumber(props.phone);
   const duplicate = normalizedPhone
     ? props.contacts.find((contact) => contact.id !== props.editing?.id && contact.contact_phones.some((phone) => phone.phone_number === normalizedPhone))
     : undefined;
@@ -95,7 +105,7 @@ export default function App() {
   const [contactEmail, setContactEmail] = useState("");
   const [contactSearch, setContactSearch] = useState("");
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  const [destination, setDestination] = useState("");
+  const [destination, setDestination] = useState(takeCallDraftFromUrl);
   const [notice, setNotice] = useState("");
   const [activeTab, setActiveTab] = useState<"activity" | "contacts" | "messages" | "settings">("activity");
   const [calls, setCalls] = useState<CallRecord[]>([]);
@@ -126,6 +136,10 @@ export default function App() {
   selectedConversationIdRef.current = selectedConversationId;
   const smsSegmentInfo = getSmsSegmentInfo(messageBody.trim());
   const selectedConversationContactName = conversations.find((conversation) => conversation.id === selectedConversationId)?.remoteContactName ?? null;
+  const normalizedDestination = normalizePhoneNumber(destination);
+  const destinationContact = normalizedDestination
+    ? contacts.find((contact) => contact.contact_phones.some((phone) => phone.phone_number === normalizedDestination)) ?? null
+    : null;
 
   useEffect(() => {
     if (!supabase) return;
@@ -718,9 +732,9 @@ export default function App() {
   async function createContact(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedOrg) return;
-    const phone = contactPhone.replace(/[\s().-]/g, "");
-    if (phone && !/^\+[1-9]\d{7,14}$/.test(phone)) {
-      setNotice("Saisissez le téléphone au format international +32… .");
+    const phone = contactPhone.trim() ? normalizePhoneNumber(contactPhone) : null;
+    if (contactPhone.trim() && !phone) {
+      setNotice("Saisissez un numéro international ou un numéro français à 10 chiffres.");
       return;
     }
     setBusy(true);
@@ -878,9 +892,9 @@ export default function App() {
       return;
     }
     if (!selectedOrg || !activeLine || !activeAssignment?.can_voice || !activeLine.voice_enabled) return;
-    const normalizedDestination = destination.replace(/[\s().-]/g, "");
-    if (!/^\+[1-9]\d{7,14}$/.test(normalizedDestination)) {
-      setNotice("Saisissez un numéro international au format +32… .");
+    const normalizedDestination = normalizePhoneNumber(destination);
+    if (!normalizedDestination) {
+      setNotice("Saisissez un numéro international ou un numéro français à 10 chiffres.");
       return;
     }
     setBusy(true);
@@ -1051,7 +1065,7 @@ export default function App() {
               <p className="settings-status">Version de l’application Web : <b>{webPackage.version}</b></p>
             </section>
           ) : (
-            <><section className="stats-grid"><article className="stat-card"><div className="stat-icon icon-call">↗</div><span>Appels récents</span><strong>{calls.length}</strong><small>Sur la ligne sélectionnée</small></article><article className="stat-card"><div className="stat-icon icon-contact">♙</div><span>Contacts</span><strong>{contacts.length}</strong><small>Dans votre organisation</small></article><article className="stat-card"><div className="stat-icon icon-message">▤</div><span>Conversations</span><strong>{conversations.length}</strong><small>Sur la ligne sélectionnée</small></article></section><section className="dashboard-grid"><div className="content-card recent-card"><div className="section-heading"><div><span className="eyebrow">VOTRE JOURNÉE</span><h2>Activité récente</h2></div></div>{calls.length ? <div className="recent-call-list">{calls.slice(0, 8).map((call) => <div className="recent-call-row" key={call.id}><span className={`recent-call-icon ${call.direction}`} aria-hidden="true">{call.direction === "outbound" ? "↗" : "↙"}</span><div className="recent-call-copy"><b>{call.remoteContactName ?? call.remote_number}</b><small>{call.remoteContactName ? `${call.remote_number} · ` : ""}{call.direction === "outbound" ? "Appel sortant" : "Appel entrant"} · {new Date(call.created_at).toLocaleString("fr-BE", { dateStyle: "short", timeStyle: "short" })}</small></div><span className="recent-call-status">{callStatus(call.status)}</span></div>)}</div> : <div className="empty-state compact"><span className="empty-icon">◷</span><b>{workspaceState === "loading" ? "Chargement des appels…" : workspaceState === "error" ? "Historique indisponible" : "Aucun appel pour le moment"}</b><p>{workspaceState === "loading" ? "Récupération de l’activité de votre ligne." : workspaceState === "error" ? "Vérifiez la connexion puis actualisez l’espace." : "Les appels de votre ligne apparaîtront ici."}</p></div>}</div><div className="content-card compose-card"><div className="section-heading"><div><span className="eyebrow">NOUVEL APPEL</span><h2>Composer</h2></div><span className="compose-icon" aria-hidden="true">⌕</span></div><label className="number-entry"><span>Numéro de téléphone</span><input inputMode="tel" value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="+32 470 00 00 00" disabled={voiceState !== "idle" || !voiceTabOwner} /></label><div className="dial-pad" role="group" aria-label="Clavier téléphonique">{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit, index) => <button type="button" key={digit} aria-label={voiceState === "active" ? `Envoyer la tonalité ${digit}` : `Ajouter ${digit} au numéro`} disabled={!voiceTabOwner || (voiceState === "idle" && (digit === "#" || digit === "*"))} onClick={() => voiceState === "active" ? voiceClient.current?.sendDigits(digit) : setDestination((value) => `${value}${digit}`)}>{digit}{index > 0 && index < 9 && <small aria-hidden="true">{["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ"][index]}</small>}</button>)}</div>{voiceState === "idle" ? <button className="button button-call button-wide" disabled={!voiceTabOwner || !destination || busy || !activeLine?.voice_enabled || !activeAssignment?.can_voice} onClick={() => void startVoiceCall()}><span aria-hidden="true">⌕</span>{busy ? "Préparation…" : "Appeler"}</button> : <div className="voice-active-controls"><p role="status">{incomingFrom ? `Appel entrant de ${incomingFrom}` : voiceStatus}</p>{incomingFrom && <div className="voice-action-row"><button className="button button-primary" onClick={() => voiceClient.current?.acceptCall()}>Répondre</button><button className="button" onClick={() => voiceClient.current?.rejectCall()}>Refuser</button></div>}{voiceState === "active" && <div className="voice-action-row"><button aria-pressed={muted} className={muted ? "button button-primary" : "button"} onClick={() => voiceClient.current?.setMuted(!muted)}>{muted ? "Rétablir le son" : "Muet"}</button><button className="button button-danger" onClick={() => voiceClient.current?.hangUp()}>Raccrocher</button></div>}</div>}<p className="compose-hint">{activeLine?.voice_enabled && activeAssignment?.can_voice ? voiceStatus : "Les appels sont désactivés dans cet environnement."}</p></div></section></>
+            <><section className="stats-grid"><article className="stat-card"><div className="stat-icon icon-call">↗</div><span>Appels récents</span><strong>{calls.length}</strong><small>Sur la ligne sélectionnée</small></article><article className="stat-card"><div className="stat-icon icon-contact">♙</div><span>Contacts</span><strong>{contacts.length}</strong><small>Dans votre organisation</small></article><article className="stat-card"><div className="stat-icon icon-message">▤</div><span>Conversations</span><strong>{conversations.length}</strong><small>Sur la ligne sélectionnée</small></article></section><section className="dashboard-grid"><div className="content-card recent-card"><div className="section-heading"><div><span className="eyebrow">VOTRE JOURNÉE</span><h2>Activité récente</h2></div></div>{calls.length ? <div className="recent-call-list">{calls.slice(0, 8).map((call) => <div className="recent-call-row" key={call.id}><span className={`recent-call-icon ${call.direction}`} aria-hidden="true">{call.direction === "outbound" ? "↗" : "↙"}</span><div className="recent-call-copy"><b>{call.remoteContactName ?? call.remote_number}</b><small>{call.remoteContactName ? `${call.remote_number} · ` : ""}{call.direction === "outbound" ? "Appel sortant" : "Appel entrant"} · {new Date(call.created_at).toLocaleString("fr-BE", { dateStyle: "short", timeStyle: "short" })}</small></div><span className="recent-call-status">{callStatus(call.status)}</span></div>)}</div> : <div className="empty-state compact"><span className="empty-icon">◷</span><b>{workspaceState === "loading" ? "Chargement des appels…" : workspaceState === "error" ? "Historique indisponible" : "Aucun appel pour le moment"}</b><p>{workspaceState === "loading" ? "Récupération de l’activité de votre ligne." : workspaceState === "error" ? "Vérifiez la connexion puis actualisez l’espace." : "Les appels de votre ligne apparaîtront ici."}</p></div>}</div><div className="content-card compose-card"><div className="section-heading"><div><span className="eyebrow">NOUVEL APPEL</span><h2>Composer</h2></div><span className="compose-icon" aria-hidden="true">⌕</span></div><label className="number-entry"><span>Numéro de téléphone</span><input inputMode="tel" value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="+32 470 00 00 00" disabled={voiceState !== "idle" || !voiceTabOwner} /></label>{destinationContact && <p className="compose-hint" role="status">Contact de votre organisation : {destinationContact.display_name}</p>}<div className="dial-pad" role="group" aria-label="Clavier téléphonique">{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit, index) => <button type="button" key={digit} aria-label={voiceState === "active" ? `Envoyer la tonalité ${digit}` : `Ajouter ${digit} au numéro`} disabled={!voiceTabOwner || (voiceState === "idle" && (digit === "#" || digit === "*"))} onClick={() => voiceState === "active" ? voiceClient.current?.sendDigits(digit) : setDestination((value) => `${value}${digit}`)}>{digit}{index > 0 && index < 9 && <small aria-hidden="true">{["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ"][index]}</small>}</button>)}</div>{voiceState === "idle" ? <button className="button button-call button-wide" disabled={!voiceTabOwner || !destination || busy || !activeLine?.voice_enabled || !activeAssignment?.can_voice} onClick={() => void startVoiceCall()}><span aria-hidden="true">⌕</span>{busy ? "Préparation…" : "Appeler"}</button> : <div className="voice-active-controls"><p role="status">{incomingFrom ? `Appel entrant de ${incomingFrom}` : voiceStatus}</p>{incomingFrom && <div className="voice-action-row"><button className="button button-primary" onClick={() => voiceClient.current?.acceptCall()}>Répondre</button><button className="button" onClick={() => voiceClient.current?.rejectCall()}>Refuser</button></div>}{voiceState === "active" && <div className="voice-action-row"><button aria-pressed={muted} className={muted ? "button button-primary" : "button"} onClick={() => voiceClient.current?.setMuted(!muted)}>{muted ? "Rétablir le son" : "Muet"}</button><button className="button button-danger" onClick={() => voiceClient.current?.hangUp()}>Raccrocher</button></div>}</div>}<p className="compose-hint">{activeLine?.voice_enabled && activeAssignment?.can_voice ? voiceStatus : "Les appels sont désactivés dans cet environnement."}</p></div></section></>
           )}
           <footer className="page-footer"><span>onoff <b>·</b> Prototype privé</span><span>Vos données sont synchronisées en toute sécurité.</span></footer>
         </div>

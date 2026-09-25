@@ -18,8 +18,8 @@ apps/mobile/android/.gradle/
 apps/mobile/android/app/build/
 apps/desktop/release/
 apps/extension/.output/
+apps/extension/.wxt/
 *.mobileprovision
 *.p12
 *.keystore
 *.jks
-

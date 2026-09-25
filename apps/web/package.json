@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@onoff/api-client": "workspace:*",
+    "@onoff/contracts": "workspace:*",
     "@onoff/voice-contract": "workspace:*",
     "@onoff/voice-web": "workspace:*",
     "@supabase/supabase-js": "2.117.1",

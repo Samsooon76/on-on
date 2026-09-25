@@ -18,7 +18,7 @@
 | Mode maintenance | Revue statique: `OPERATIONS_PAUSED=true` renvoie `503 operations_paused` sur la création d'appel et de SMS; les clients affichent le message de réponse. Le mode ne termine pas les appels actifs. Pas d'essai runtime sur un serveur hébergé |
 | Métriques client vocales | Migration `20260925145647_voice_client_diagnostic_rate_limit` appliquée sur Supabase en ligne; l'opération `voice_client_diagnostic` est limitée à 10/5 min/utilisateur. Les permissions du RPC restent réservées à `service_role`. Les événements n'acceptent que des catégories, plateforme, version et durée bornée; le code client/API passe le typecheck. Aucun événement client réel n'a été émis pendant cette recette |
 
-Le workflow `.github/workflows/ci.yml` se déclenche sur les pull requests et les pushs vers `main`; il lance `lint`, `typecheck`, `test` et `build` sur tout le workspace. Un changement de package partagé passe donc par les contrôles de ses consommateurs. La configuration a été revue et le commit initial a été poussé sur `main`; l'exécution hébergée de la CI reste à vérifier.
+Le workflow `.github/workflows/ci.yml` se déclenche sur les pull requests et les pushs vers `main`; il lance `lint`, `typecheck`, `test` et `build` sur tout le workspace. Un changement de package partagé passe donc par les contrôles de ses consommateurs. L'exécution CI du commit initial `13aea32` a réussi sur GitHub; le suivi du dernier commit est effectué après chaque push.
 
 Les migrations ont été vérifiées et appliquées uniquement au projet Supabase hébergé `mzqycbxnbyxeivdduhrl`; aucune instance Supabase locale n'a été démarrée ou utilisée.
 
@@ -130,7 +130,7 @@ La [matrice de support des plateformes](platform-support-matrix.md) sépare les 
 - L'export Expo est un bundle JavaScript, pas un build installable/signé.
 - La machine n'a pas Xcode complet, simulateur iOS, Android SDK/ADB ni un JDK récent; aucun appareil physique n'était connecté.
 - Aucune ligne, aucun utilisateur Supabase et aucun credential Twilio valide n'étant configuré, aucun appel ni SMS réel n'a été initié.
-- Le dépôt `Samsooon76/on-on` a été fourni, mais sa résolution réseau échoue, la session `gh` est invalide et `.git` est en lecture seule; aucun service Railway Onoff n'a été créé ni publié.
+- Lors de la première recette, la résolution réseau de GitHub échouait et la session `gh` était invalide; les pushes ont depuis réussi avec les credentials Git configurés. Aucun service Railway Onoff n'a été créé ni publié.
 
 ## Vérification des contrats Fastify et des permissions Supabase — 25 septembre
 
@@ -160,4 +160,18 @@ Une nouvelle lecture des catalogues PostgreSQL sur Supabase hébergé confirme R
 
 La suite pgTAP `supabase/tests/rls_isolation.test.sql` passe avec ses neuf assertions sur une branche Supabase distante isolée, sans données de production. Elle vérifie l'isolation des données de A face aux fixtures de B et les refus de lecture des événements fournisseur et des contacts par `anon`. La transaction annule les fixtures et la branche temporaire est supprimée. Cela valide le contexte Postgres simulé dans la suite; des requêtes HTTP avec deux vrais JWT restent à effectuer.
 
-Après l'ajout du contrôle d'affectation admin, `CI=true pnpm test`, `pnpm lint`, `pnpm typecheck` et `pnpm build` passent à nouveau sous Node 24.19.0 et pnpm 11.9.0 : 33 tests réussis (3 contrats, 4 API client, 26 API). Les tests SQL (21 assertions) pour le RPC d'affectation sont écrits mais attendent l'autorisation de créer une branche Supabase à 0,01344 $/heure. Les suites Web, Worker et adaptateurs vocaux sont encore vides. Expo natif, Twilio, comptes réels et déploiement hébergé ne sont pas couverts.
+Après l'ajout du contrôle d'affectation admin, `CI=true pnpm test`, `pnpm lint`, `pnpm typecheck` et `pnpm build` passaient sous Node 24.19.0 et pnpm 11.9.0 : 33 tests. Les tests SQL (21 assertions) pour le RPC d'affectation attendent toujours l'autorisation de créer une branche Supabase à 0,01344 $/heure.
+
+## Extension Chrome click-to-call — 25 septembre
+
+| Vérification | Résultat |
+|---|---|
+| `CI=true pnpm test` | 37 tests réussis : 4 contrats, 4 tests API client, 26 API et 3 extension |
+| `CI=true pnpm lint` | Tous les workspaces passent |
+| `CI=true pnpm typecheck` | Tous les workspaces passent |
+| `CI=true pnpm build` | Tous les workspaces passent; l'extension produit un bundle MV3 Chrome avec WXT 0.21.4 |
+| `pnpm --filter @onoff/extension zip` | Archive créée dans `apps/extension/.output/onoffextension-0.1.0-chrome.zip` |
+| Manifeste | MV3; permissions limitées à `activeTab`, `scripting`, `storage`; aucun host permission |
+| Chrome réel | Non exécuté. Installation, pages restreintes, fermeture du popup et lancement avec compte connecté restent à valider manuellement |
+
+Le contrat partagé normalise les formats E.164, les préfixes `00`, les numéros nationaux français et la notation `+33 (0)…`. Le lien ne contient qu'un brouillon `callTo` non fiable; l'application retire le paramètre dès son chargement puis demande la confirmation normale avant de créer une intention d'appel. Aucun secret ni numéro du destinataire de test n'est inclus dans l'archive ou le dépôt.

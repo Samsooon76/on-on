@@ -1,0 +1,30 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #20312f; background: #f7faf8; font-synthesis: none; text-rendering: optimizeLegibility; }
+* { box-sizing: border-box; }
+body { width: 360px; min-height: 320px; margin: 0; }
+button, input { font: inherit; }
+.popup-shell { padding: 18px; }
+.popup-header { display: flex; align-items: center; gap: 10px; padding-bottom: 16px; border-bottom: 1px solid #e4ebe7; }
+.popup-header > div { display: grid; gap: 1px; }
+.popup-header strong { font-size: 14px; }
+.popup-header small { color: #74817c; font-size: 11px; }
+.brand-mark { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 9px; background: #287557; color: white; font-size: 19px; font-weight: 800; }
+.settings-toggle { width: 30px; height: 30px; margin-left: auto; border: 0; border-radius: 8px; background: transparent; color: #6b7872; cursor: pointer; }
+.settings-toggle:hover { background: #edf3ef; }
+.form-heading { padding: 18px 0 14px; }
+.eyebrow { color: #39836a; font-size: 9px; font-weight: 750; letter-spacing: .11em; }
+h1 { margin: 5px 0 4px; color: #233530; font-size: 17px; }
+.form-heading p { margin: 0; color: #78847e; font-size: 11px; line-height: 1.5; }
+.field { display: grid; gap: 6px; margin-top: 12px; color: #54625d; font-size: 10px; font-weight: 650; }
+.field input { width: 100%; min-height: 38px; padding: 9px 10px; border: 1px solid #dce5df; border-radius: 8px; outline: none; background: #fff; color: #24362f; font-size: 12px; }
+.field input:focus { border-color: #4e9b7b; box-shadow: 0 0 0 3px #4e9b7b20; }
+.field small { color: #7b8782; font-size: 9px; font-weight: 400; line-height: 1.45; }
+.settings-field { padding: 10px; border-radius: 9px; background: #edf4ef; }
+.selection-button { width: 100%; min-height: 35px; border: 1px solid #dbe7df; border-radius: 8px; background: #fff; color: #35694f; cursor: pointer; font-size: 11px; font-weight: 650; }
+.selection-button span { padding-right: 5px; font-size: 15px; }
+.selection-button:hover { background: #f1f7f3; }
+.selection-button:disabled { opacity: .65; cursor: wait; }
+.open-button { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: center; gap: 8px; margin-top: 16px; border: 0; border-radius: 9px; background: #287557; color: #fff; cursor: pointer; font-size: 12px; font-weight: 700; }
+.open-button:hover:not(:disabled) { background: #21674b; }
+.open-button:disabled { opacity: .48; cursor: not-allowed; }
+.notice { margin: 10px 0 0; padding: 9px 10px; border-radius: 8px; background: #fff4de; color: #78571f; font-size: 10px; line-height: 1.45; }
+footer { margin-top: 14px; color: #88928e; font-size: 9px; line-height: 1.45; }

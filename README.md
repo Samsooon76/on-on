@@ -10,6 +10,7 @@ Prototype privé de téléphonie multicanal : React/Vite pour le web, Fastify po
 4. Les migrations et types sont gérés sur le projet Supabase en ligne : `pnpm db:migrations:online`, `pnpm db:push:online` et `pnpm db:types:online`. Vérifier le projet affiché avant toute migration.
 5. Lancer `pnpm dev`. L'API écoute sur `http://localhost:4100`; le web écoute sur `http://localhost:5173`.
 6. Pour le mobile, copier `apps/mobile/.env.example` vers `apps/mobile/.env`, puis lancer `pnpm --filter @onoff/mobile start`. Le SDK vocal natif Twilio exige un development build iOS/Android; Expo Go ne suffit pas. Voir [la procédure mobile](docs/mobile-compatibility.md).
+7. Pour l'extension Chrome, lancer `pnpm --filter @onoff/extension dev`, puis charger `apps/extension/.output/chrome-mv3-dev` dans `chrome://extensions` avec le mode développeur. Renseigner l'URL HTTPS de l'application dans les réglages de l'extension. Voir [le guide click-to-call](docs/extension.md).
 
 Le worker d'exploitation s'exécute séparément avec `pnpm --filter @onoff/worker dev` ou `pnpm --filter @onoff/worker start`. Il requiert des credentials serveur Supabase et Twilio rotatés, et refuse explicitement une URL Supabase locale.
 
@@ -35,4 +36,5 @@ Les appels et SMS sont désactivés tant que les valeurs Twilio vérifiées de l
 - [Diagnostic et reprise](docs/runbooks/incident-diagnostics.md)
 - [État d'implémentation](docs/implementation-status.md)
 - [Compatibilité mobile](docs/mobile-compatibility.md)
+- [Extension Chrome click-to-call](docs/extension.md)
 - [Rapport de build et smoke tests](docs/test-reports/2026-09-25-build-and-smoke.md)

@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-web build && pnpm --parallel --filter @onoff/api --filter @onoff/web dev",
-    "build": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm --filter @onoff/web build && pnpm --filter @onoff/worker build",
+    "build": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm --filter @onoff/web build && pnpm --filter @onoff/worker build && pnpm --filter @onoff/extension build",
     "lint": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm -r lint",
     "typecheck": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm -r typecheck",
     "test": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm -r test",

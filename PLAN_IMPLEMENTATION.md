@@ -906,24 +906,24 @@ Ces mesures suivent les recommandations d'isolation des processus et de permissi
 
 ### 13.1. Créer l'extension minimale
 
-- [ ] Créer `apps/extension` avec WXT + React, puis fixer les versions. [Installation WXT](https://wxt.dev/guide/installation.html).
-- [ ] Utiliser Manifest V3 et une popup simple.
-- [ ] Ajouter une action explicite : sélectionner un numéro puis « Ouvrir dans le composeur ».
-- [ ] Normaliser les numéros avec le même contrat que l'application.
-- [ ] Limiter les permissions à celles réellement nécessaires, par exemple `activeTab`, `scripting`, `storage` et `contextMenus` selon les fonctions retenues.
-- [ ] Éviter une lecture permanente de tous les sites ; demander une permission de domaine seulement pour une fonction qui l'exige.
-- [ ] Transmettre uniquement le numéro sélectionné et le contexte utile, pas le contenu complet de la page.
+- [x] Créer `apps/extension` avec WXT + React, puis fixer les versions. [Installation WXT](https://wxt.dev/guide/installation.html).
+- [x] Utiliser Manifest V3 et une popup simple.
+- [x] Ajouter une action explicite : sélectionner un numéro puis « Ouvrir dans le composeur ».
+- [x] Normaliser les numéros avec le même contrat que l'application, y compris les numéros nationaux français.
+- [x] Limiter les permissions à celles réellement nécessaires (`activeTab`, `scripting`, `storage`).
+- [x] Éviter une lecture permanente de tous les sites ; demander une permission de domaine seulement pour une fonction qui l'exige.
+- [x] Transmettre uniquement le numéro sélectionné et le contexte utile, pas le contenu complet de la page.
 
 `activeTab` fournit un accès temporaire à l'onglet après une action de l'utilisateur ; son fonctionnement doit correspondre au parcours retenu. [Permission activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab).
 
 ### 13.2. Implémenter d'abord le parcours simple
 
-- [ ] Ouvrir l'application web sur une route de composeur avec le numéro prérempli et sans token de session dans l'URL.
-- [ ] Si aucune session n'existe, connecter l'utilisateur puis restaurer ce brouillon.
-- [ ] Rechercher le contact depuis l'application authentifiée ; ne pas donner un accès au carnet à la page web visitée.
-- [ ] Demander à l'utilisateur de choisir sa ligne et d'appuyer sur Appeler dans l'application.
-- [ ] Passer alors par la création normale d'intention d'appel et toutes les vérifications serveur.
-- [ ] Tester l'encodage, les numéros invalides, les champs trop longs et les paramètres malveillants.
+- [x] Ouvrir l'application web avec le numéro prérempli et sans token de session dans l'URL.
+- [x] Si aucune session n'existe, connecter l'utilisateur puis restaurer ce brouillon.
+- [x] Rechercher le contact depuis l'application authentifiée ; ne pas donner un accès au carnet à la page web visitée.
+- [x] Demander à l'utilisateur de choisir sa ligne et d'appuyer sur Appeler dans l'application.
+- [x] Passer alors par la création normale d'intention d'appel et toutes les vérifications serveur.
+- [x] Tester l'encodage, les numéros invalides, les champs trop longs et les paramètres malveillants.
 
 Ce premier parcours satisfait le click-to-call sans moteur audio dans l'extension et sans protocole d'authentification supplémentaire inutile. Le lien transporte un brouillon non fiable ; l'autorisation existe dans la session de l'application cible.
 
@@ -939,12 +939,12 @@ Ce premier parcours satisfait le click-to-call sans moteur audio dans l'extensio
 
 ### 13.4. Tester et distribuer
 
-- [ ] Tester pages classiques, numéros internationaux, sélection de texte et liens `tel:`.
+- [ ] Tester pages classiques, numéros internationaux, sélection de texte et liens `tel:` dans Chrome réel.
 - [ ] Gérer proprement les pages où Chrome interdit l'injection.
 - [ ] Tester popup fermée et redémarrage du service worker sans perte d'une commande durable.
 - [ ] Ne pas stocker l'état indispensable uniquement dans des variables globales du service worker. [Cycle de vie Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle).
 - [ ] Tester utilisateur déconnecté, session expirée, commande déjà consommée et tentative depuis un site non autorisé.
-- [ ] Produire le paquet d'extension et un guide de chargement interne ; préparer la fiche de publication seulement si la diffusion publique est décidée.
+- [x] Produire le paquet d'extension et un guide de chargement interne ; préparer la fiche de publication seulement si la diffusion publique est décidée.
 
 **Validation :** un numéro sélectionné ouvre le bon composeur et son contact autorisé, puis un appel réel peut être lancé sans audio ni secret privilégié dans l'extension.
 
