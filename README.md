@@ -30,6 +30,7 @@ Les appels et SMS sont désactivés tant que les valeurs Twilio vérifiées de l
 - [API](docs/api.md)
 - [Limitations connues](docs/known-limitations.md)
 - [Configuration Twilio](docs/runbooks/twilio-setup.md)
+- [Commande de numéros depuis l’interface](docs/runbooks/number-provisioning.md)
 - [Rotation des secrets](docs/runbooks/secrets-rotation.md)
 - [Sauvegarde et restauration Supabase](docs/runbooks/backup-and-restore.md)
 - [Déploiement Railway](docs/runbooks/railway-setup.md)

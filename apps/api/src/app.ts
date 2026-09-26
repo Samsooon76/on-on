@@ -10,6 +10,7 @@ import { requestBodySchemas, responsesForRoute } from "./response-schemas.js";
 import { findAssignedLine, getActiveOrganizationIds, isActiveOrganizationAdmin } from "./repositories/access.js";
 import { persistLineAssignment } from "./repositories/line-assignments.js";
 import { createVoiceAccessToken } from "./voice.js";
+import { createNumberProvider, registerNumberRoutes, type NumberProvider } from "./number-provisioning.js";
 
 export type RequestContext = {
   userId: string;
@@ -30,6 +31,7 @@ type SmsProvider = {
 export type ApiDependencies = {
   createSupabaseClient?: typeof createClient<Database>;
   createSmsProvider?: (apiKeySid: string, apiKeySecret: string, accountSid: string) => SmsProvider;
+  numberProvider?: NumberProvider;
 };
 
 type PageCursor = { createdAt: string; id: string };
@@ -251,6 +253,10 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     }
     request.context = { userId: data.user.id, accessToken: match[1], supabase: userClient };
   });
+
+  registerNumberRoutes(routes, config, serviceSupabase, dependencies.numberProvider ?? (
+    config.TWILIO_ACCOUNT_SID && config.TWILIO_API_KEY_SID && config.TWILIO_API_KEY_SECRET ? createNumberProvider(config) : null
+  ));
 
   routes.post("/v1/diagnostics/voice", async (request, reply) => {
     const context = request.context;

@@ -58,9 +58,9 @@ test("ready health requires Supabase Auth and PostgREST", async (t) => {
   assert.deepEqual(ready.json().dependencies, { auth: true, database: true });
   assert.deepEqual(requested, [
     "https://example.supabase.co/auth/v1/health",
-    "https://example.supabase.co/rest/v1/",
+    "https://example.supabase.co/rest/v1/organizations?select=id&limit=0",
     "https://example.supabase.co/auth/v1/health",
-    "https://example.supabase.co/rest/v1/",
+    "https://example.supabase.co/rest/v1/organizations?select=id&limit=0",
   ]);
 });
 

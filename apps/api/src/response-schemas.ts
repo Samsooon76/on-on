@@ -7,6 +7,9 @@ import {
   errorResponseSchema,
   messageCreateSchema,
   lineAssignmentUpdateSchema,
+  numberOfferSchema,
+  numberOrderSchema,
+  numberPurchaseSchema,
   uuidSchema,
   voiceTargetSchema,
 } from "@onoff/contracts";
@@ -126,6 +129,7 @@ const listErrorResponses = {
 };
 
 export const requestBodySchemas = new Map<string, z.ZodType>([
+  ["POST /v1/organizations/:orgId/number-orders", numberPurchaseSchema],
   ["POST /v1/diagnostics/voice", z.object({
     event: z.enum(["voice_registration_failed", "history_refresh_succeeded", "history_refresh_failed"]),
     platform: z.enum(["web", "ios", "android"]),
@@ -144,6 +148,9 @@ export const requestBodySchemas = new Map<string, z.ZodType>([
 ]);
 
 export const successResponseSchemas = new Map<string, Record<number, z.ZodType>>([
+  ["GET /v1/organizations/:orgId/number-offers", { 200: z.object({ items: z.array(numberOfferSchema) }) }],
+  ["GET /v1/organizations/:orgId/number-orders", { 200: z.object({ items: z.array(numberOrderSchema) }) }],
+  ["POST /v1/organizations/:orgId/number-orders", { 200: numberOrderSchema, 201: numberOrderSchema, 202: numberOrderSchema }],
   ["GET /health/live", { 200: z.object({ status: z.literal("ok"), version: z.string().optional() }) }],
   ["GET /health/ready", {
     200: z.object({ status: z.literal("ready"), version: z.string().optional(), dependencies: z.object({ auth: z.boolean(), database: z.boolean() }) }),

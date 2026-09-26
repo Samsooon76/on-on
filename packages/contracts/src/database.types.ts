@@ -817,6 +817,161 @@ export type Database = {
           },
         ]
       }
+      number_orders: {
+        Row: {
+          account_sid: string
+          created_at: string
+          failure_message: string | null
+          id: string
+          idempotency_key: string
+          line_id: string | null
+          organization_id: string
+          phone_number: string
+          quote_id: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          account_sid: string
+          created_at?: string
+          failure_message?: string | null
+          id?: string
+          idempotency_key: string
+          line_id?: string | null
+          organization_id: string
+          phone_number: string
+          quote_id: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          account_sid?: string
+          created_at?: string
+          failure_message?: string | null
+          id?: string
+          idempotency_key?: string
+          line_id?: string | null
+          organization_id?: string
+          phone_number?: string
+          quote_id?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "number_orders_line_id_fkey"
+            columns: ["line_id"]
+            isOneToOne: false
+            referencedRelation: "lines"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "number_orders_organization_id_user_id_fkey"
+            columns: ["organization_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["organization_id", "user_id"]
+          },
+          {
+            foreignKeyName: "number_orders_quote_id_fkey"
+            columns: ["quote_id"]
+            isOneToOne: true
+            referencedRelation: "number_quotes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      number_provisioning_profiles: {
+        Row: {
+          address_sid: string | null
+          bundle_sid: string | null
+          country: string
+          end_user_type: string
+          organization_id: string
+        }
+        Insert: {
+          address_sid?: string | null
+          bundle_sid?: string | null
+          country: string
+          end_user_type: string
+          organization_id: string
+        }
+        Update: {
+          address_sid?: string | null
+          bundle_sid?: string | null
+          country?: string
+          end_user_type?: string
+          organization_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "number_provisioning_profiles_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      number_quotes: {
+        Row: {
+          account_sid: string
+          address_sid: string | null
+          bundle_sid: string | null
+          country: string
+          created_at: string
+          currency: string
+          expires_at: string
+          id: string
+          monthly_price: number
+          organization_id: string
+          phone_number: string
+          sms_enabled: boolean
+          user_id: string
+        }
+        Insert: {
+          account_sid: string
+          address_sid?: string | null
+          bundle_sid?: string | null
+          country: string
+          created_at?: string
+          currency: string
+          expires_at?: string
+          id?: string
+          monthly_price: number
+          organization_id: string
+          phone_number: string
+          sms_enabled: boolean
+          user_id: string
+        }
+        Update: {
+          account_sid?: string
+          address_sid?: string | null
+          bundle_sid?: string | null
+          country?: string
+          created_at?: string
+          currency?: string
+          expires_at?: string
+          id?: string
+          monthly_price?: number
+          organization_id?: string
+          phone_number?: string
+          sms_enabled?: boolean
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "number_quotes_organization_id_user_id_fkey"
+            columns: ["organization_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["organization_id", "user_id"]
+          },
+        ]
+      }
       organizations: {
         Row: {
           created_at: string
@@ -910,6 +1065,26 @@ export type Database = {
           p_voice_identity: string
         }
         Returns: Json
+      }
+      begin_number_order: {
+        Args: {
+          p_key: string
+          p_org_id: string
+          p_quote_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      complete_number_order: {
+        Args: {
+          p_account_sid: string
+          p_number_sid: string
+          p_order_id: string
+          p_phone_number: string
+          p_sms: boolean
+          p_voice: boolean
+        }
+        Returns: string
       }
       cancel_call_intent: {
         Args: {

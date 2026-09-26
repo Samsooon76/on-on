@@ -83,6 +83,27 @@ export type ContactUpdate = z.infer<typeof contactUpdateSchema>;
 export type DeviceCreate = z.infer<typeof deviceCreateSchema>;
 export type LineAssignmentUpdate = z.infer<typeof lineAssignmentUpdateSchema>;
 
+export const numberCountrySchema = z.enum(["FR", "BE", "GB", "US"]);
+export const numberPurchaseSchema = z.object({ quoteId: uuidSchema }).strict();
+export const numberOfferSchema = z.object({
+  quoteId: uuidSchema,
+  phoneNumber: e164Schema,
+  monthlyPrice: z.number().nonnegative(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  smsEnabled: z.boolean(),
+  expiresAt: z.string(),
+});
+export const numberOrderSchema = z.object({
+  id: uuidSchema,
+  requestKey: uuidSchema,
+  status: z.enum(["pending", "completed", "failed"]),
+  phoneNumber: e164Schema,
+  lineId: uuidSchema.nullable(),
+  message: z.string(),
+});
+export type NumberOffer = z.infer<typeof numberOfferSchema>;
+export type NumberOrder = z.infer<typeof numberOrderSchema>;
+
 export const voiceTargetSchema = z.object({
   organizationId: uuidSchema,
   lineId: uuidSchema,

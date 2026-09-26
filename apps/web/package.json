@@ -12,10 +12,12 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@fontsource/geist": "5.3.0",
     "@onoff/api-client": "workspace:*",
     "@onoff/contracts": "workspace:*",
     "@onoff/voice-contract": "workspace:*",
     "@onoff/voice-web": "workspace:*",
+    "@phosphor-icons/react": "2.1.10",
     "@supabase/supabase-js": "2.117.1",
     "@twilio/voice-sdk": "2.18.5",
     "react": "19.2.8",

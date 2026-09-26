@@ -1,6 +1,13 @@
 import { createClient, type Session } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { NumberPurchase } from "./NumberPurchase";
 import webPackage from "../package.json";
+import { ArrowClockwise, ArrowRight, ChatCircle, CheckCircle, GearSix, Microphone, Monitor, Phone, Plus, SignOut, DeviceMobile, Users, WarningCircle, X } from "@phosphor-icons/react";
+import { Conversations } from "./Conversations";
+import { Contacts } from "./Contacts";
+import { CallDialog, NewConversation } from "./ConversationDialogs";
+import { Avatar, EmptyState, Modal } from "./ui";
+import { buildInbox, formatPhone, phoneKey, type Contact, type CallRecord, type Conversation, type MessageRecord } from "./conversation-model";
 import { normalizePhoneNumber } from "@onoff/contracts";
 import { ApiClientError, createApiClient, getSmsSegmentInfo } from "@onoff/api-client";
 import { createVoiceClient, type VoiceEvent } from "@onoff/voice-web";
@@ -15,10 +22,6 @@ const supabase = supabaseUrl && supabaseKey
 
 type Organization = { organization_id: string; role: "admin" | "member"; organizations: { id: string; name: string } | null };
 type LineAssignment = { can_voice: boolean; can_sms: boolean; lines: { id: string; phone_number: string; voice_enabled: boolean; sms_enabled: boolean } | null };
-type Contact = { id: string; display_name: string; email: string | null; version: number; contact_phones: { id: string; phone_number: string; label: string }[] };
-type CallRecord = { id: string; direction: "inbound" | "outbound"; remote_number: string; remoteContactName: string | null; status: string; created_at: string; duration_seconds: number | null };
-type Conversation = { id: string; lineId: string; remoteNumber: string; remoteContactName: string | null; lastMessageAt: string | null; lastMessage: { id: string; body: string; direction: string; status: string; created_at: string } | null; unread: boolean };
-type MessageRecord = { id: string; direction: "inbound" | "outbound"; body: string; status: string; provider_error_code: string | null; created_at: string; sent_at: string | null; delivered_at: string | null };
 type DeviceRecord = { id: string; organization_id: string; platform: string; label: string; status: string; last_active_at: string | null; created_at: string };
 type VoiceDiagnosticEvent = "voice_registration_failed" | "history_refresh_succeeded" | "history_refresh_failed";
 
@@ -29,58 +32,6 @@ function takeCallDraftFromUrl(): string {
   url.searchParams.delete("callTo");
   window.history.replaceState(window.history.state, "", url);
   return normalizePhoneNumber(value) ?? "";
-}
-
-function ContactPanel(props: {
-  contacts: Contact[];
-  dataState: "loading" | "ready" | "error";
-  busy: boolean;
-  search: string;
-  editing: Contact | null;
-  name: string;
-  email: string;
-  phone: string;
-  onSearch(value: string): void;
-  onName(value: string): void;
-  onEmail(value: string): void;
-  onPhone(value: string): void;
-  onSubmit(event: React.FormEvent): void;
-  onCancel(): void;
-  onEdit(contact: Contact): void;
-  onArchive(contact: Contact): void;
-  onCall(contact: Contact): void;
-  onMessage(contact: Contact): void;
-}) {
-  const normalizedPhone = normalizePhoneNumber(props.phone);
-  const duplicate = normalizedPhone
-    ? props.contacts.find((contact) => contact.id !== props.editing?.id && contact.contact_phones.some((phone) => phone.phone_number === normalizedPhone))
-    : undefined;
-  return (
-    <section className="content-card contacts-card">
-      <div className="section-heading"><div><span className="eyebrow">CARNET PARTAGÉ</span><h2>Répertoire</h2></div><span className="subtle-count">{props.contacts.length} contact{props.contacts.length === 1 ? "" : "s"}</span></div>
-      <form className="contact-form" onSubmit={props.onSubmit}>
-        <input aria-label="Nom du contact" value={props.name} onChange={(event) => props.onName(event.target.value)} placeholder="Nom du contact" required maxLength={120} />
-        <input aria-label="Téléphone" inputMode="tel" value={props.phone} onChange={(event) => props.onPhone(event.target.value)} placeholder="+32 470 00 00 00" />
-        {duplicate && <p className="duplicate-contact-warning" role="status">Ce numéro figure déjà chez {duplicate.display_name}. Vérifiez avant d’enregistrer; les contacts existants ne seront pas fusionnés.</p>}
-        <input aria-label="Email" type="email" value={props.email} onChange={(event) => props.onEmail(event.target.value)} placeholder="Email (facultatif)" />
-        <button className="button button-primary" disabled={props.busy}>{props.busy ? "Enregistrement…" : props.editing ? "Enregistrer" : "Ajouter"}<span>{props.editing ? "✓" : "+"}</span></button>
-        {props.editing && <button type="button" className="button contact-cancel" onClick={props.onCancel}>Annuler</button>}
-      </form>
-      <label className="contact-search">Rechercher<input type="search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="Nom du contact" maxLength={80} /></label>
-      <div className="contact-list">{props.contacts.length ? props.contacts.map((contact) => (
-        <div className="contact-row" key={contact.id}>
-          <div className="contact-avatar">{contact.display_name.slice(0, 1).toUpperCase()}</div>
-          <div className="contact-detail"><b>{contact.display_name}</b><small>{contact.contact_phones[0]?.phone_number ?? contact.email ?? "Aucun numéro"}</small></div>
-          <div className="contact-actions">
-            <button className="contact-call" disabled={!contact.contact_phones[0]?.phone_number} onClick={() => props.onCall(contact)} aria-label={`Appeler ${contact.display_name}`}>⌕</button>
-            <button className="contact-call" disabled={!contact.contact_phones[0]?.phone_number} onClick={() => props.onMessage(contact)} aria-label={`Écrire à ${contact.display_name}`}>▤</button>
-            <button className="contact-call" onClick={() => props.onEdit(contact)} aria-label={`Modifier ${contact.display_name}`}>✎</button>
-            <button className="contact-call contact-archive" disabled={props.busy} onClick={() => props.onArchive(contact)} aria-label={`Archiver ${contact.display_name}`}>⌫</button>
-          </div>
-        </div>
-      )) : <div className="empty-state" role={props.dataState === "loading" ? "status" : undefined}><span className="empty-icon" aria-hidden="true">♙</span><b>{props.dataState === "loading" ? "Chargement des contacts…" : props.dataState === "error" ? "Contacts indisponibles" : props.search ? "Aucun résultat" : "Votre carnet est prêt"}</b><p>{props.dataState === "loading" ? "Récupération du carnet partagé." : props.dataState === "error" ? "Vérifiez la connexion puis actualisez l’espace." : props.search ? "Essayez un autre nom." : "Ajoutez le premier contact pour le partager avec votre équipe."}</p></div>}</div>
-    </section>
-  );
 }
 
 export default function App() {
@@ -98,6 +49,7 @@ export default function App() {
   const [selectedOrg, setSelectedOrg] = useState("");
   const [lines, setLines] = useState<LineAssignment[]>([]);
   const [selectedLineId, setSelectedLineId] = useState("");
+  const [numberPurchaseOpen, setNumberPurchaseOpen] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [contactName, setContactName] = useState("");
@@ -107,7 +59,21 @@ export default function App() {
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [destination, setDestination] = useState(takeCallDraftFromUrl);
   const [notice, setNotice] = useState("");
-  const [activeTab, setActiveTab] = useState<"activity" | "contacts" | "messages" | "settings">("activity");
+  const [newConversationOpen, setNewConversationOpen] = useState(false);
+  const [dialerOpen, setDialerOpen] = useState(Boolean(destination));
+  const [contactEditorOpen, setContactEditorOpen] = useState(false);
+  const [contactFormError, setContactFormError] = useState("");
+  const [messagesState, setMessagesState] = useState<"loading" | "ready" | "error">("ready");
+  const [historyCursors, setHistoryCursors] = useState<{ calls: string | null; conversations: string | null }>({ calls: null, conversations: null });
+  const [messagesCursor, setMessagesCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [messageReload, setMessageReload] = useState(0);
+  const drafts = useRef<Record<string, string>>({});
+  const workspaceRequest = useRef(0);
+  const historyScope = useRef("");
+  const historyExpanded = useRef(false);
+  const smsSubmitting = useRef(false);
+  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "settings">("conversations");
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
@@ -135,7 +101,6 @@ export default function App() {
   activeTabRef.current = activeTab;
   selectedConversationIdRef.current = selectedConversationId;
   const smsSegmentInfo = getSmsSegmentInfo(messageBody.trim());
-  const selectedConversationContactName = conversations.find((conversation) => conversation.id === selectedConversationId)?.remoteContactName ?? null;
   const normalizedDestination = normalizePhoneNumber(destination);
   const destinationContact = normalizedDestination
     ? contacts.find((contact) => contact.contact_phones.some((phone) => phone.phone_number === normalizedDestination)) ?? null
@@ -168,6 +133,7 @@ export default function App() {
         setSelectedOrg("");
         setLines([]);
         setSelectedLineId("");
+        setNumberPurchaseOpen(false);
         setContacts([]);
         setDevices([]);
         setCalls([]);
@@ -176,6 +142,12 @@ export default function App() {
         setConversationMessages([]);
         setPendingSmsAttempt(null);
         setSmsRecoveryState("checking");
+        drafts.current = {};
+        workspaceRequest.current += 1;
+        historyScope.current = "";
+        historyExpanded.current = false;
+        setMessageBody(""); setMessageDestination(""); setDestination("");
+        setContactEditorOpen(false); setNewConversationOpen(false); setDialerOpen(false);
       }
       currentUserId.current = nextUserId;
       setSession(nextSession);
@@ -194,7 +166,80 @@ export default function App() {
   const apiClient = useMemo(() => createApiClient({ baseUrl: apiBase, getAccessToken: () => authToken }), [authToken]);
   const activeAssignment = useMemo(() => lines.find((item) => item.lines?.id === selectedLineId) ?? lines.find((item) => item.lines) ?? null, [lines, selectedLineId]);
   const activeLine = activeAssignment?.lines ?? null;
-  const todayLabel = new Intl.DateTimeFormat("fr-BE", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
+  const canPurchaseNumber = organizations.find((item) => item.organization_id === selectedOrg)?.role === "admin";
+  const inbox = useMemo(() => buildInbox(activeLine?.id ?? "", conversations, calls), [activeLine?.id, conversations, calls]);
+  const scopeRef = useRef({ org: selectedOrg, line: selectedLineId });
+  scopeRef.current = { org: selectedOrg, line: selectedLineId };
+  const conversationLocked = Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready";
+  const organizationName = organizations.find((item) => item.organization_id === selectedOrg)?.organizations?.name ?? "Mon espace";
+  const canCall = Boolean(voiceTabOwner && activeLine?.voice_enabled && activeAssignment?.can_voice);
+  const canSms = Boolean(activeLine?.sms_enabled && activeAssignment?.can_sms);
+
+  function openConversation(number: string, id?: string | null): void {
+    if (conversationLocked) return;
+    const normalized = normalizePhoneNumber(number);
+    if (!normalized) return;
+    drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody;
+    setMessageBody(drafts.current[`${selectedLineId}:${phoneKey(normalized)}`] ?? "");
+    setMessageDestination(normalized);
+    setConversationMessages([]);
+    setMessagesCursor(null);
+    const smsId = id ?? conversations.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalized))?.id ?? "";
+    setSelectedConversationId(smsId);
+    setMessagesState(smsId ? "loading" : "ready");
+    setMessageReload((value) => value + 1);
+    setActiveTab("conversations");
+    setNewConversationOpen(false);
+  }
+
+  function openCall(number = ""): void {
+    if (voiceState === "idle" && !incomingFrom) setDestination(number);
+    setDialerOpen(true);
+  }
+
+  function newContact(number = ""): void {
+    setEditingContact(null);
+    setContactName(""); setContactPhone(number); setContactEmail("");
+    setContactFormError(""); setContactEditorOpen(true);
+  }
+
+  async function retryWorkspace(): Promise<void> {
+    setWorkspaceState("loading");
+    setMessageReload((value) => value + 1);
+    try { await refreshWorkspace(); setWorkspaceState("ready"); }
+    catch (error) { setWorkspaceState("error"); setNotice(error instanceof Error ? error.message : "Chargement impossible."); }
+  }
+
+  async function loadMoreHistory(): Promise<void> {
+    if (loadingMore || !selectedLineId) return;
+    const lineId = selectedLineId;
+    setLoadingMore(true);
+    try {
+      const [callPage, conversationPage] = await Promise.all([
+        historyCursors.calls ? api<{ items: CallRecord[]; nextCursor: string | null }>(`/v1/lines/${lineId}/calls?limit=50&cursor=${encodeURIComponent(historyCursors.calls)}`) : null,
+        historyCursors.conversations ? api<{ items: Conversation[]; nextCursor: string | null }>(`/v1/lines/${lineId}/conversations?limit=50&cursor=${encodeURIComponent(historyCursors.conversations)}`) : null,
+      ]);
+      if (scopeRef.current.line !== lineId) return;
+      if (callPage) setCalls((current) => [...new Map([...current, ...callPage.items].map((item) => [item.id, item])).values()]);
+      if (conversationPage) setConversations((current) => [...new Map([...current, ...conversationPage.items].map((item) => [item.id, item])).values()]);
+      historyExpanded.current = true;
+      setHistoryCursors({ calls: callPage?.nextCursor ?? null, conversations: conversationPage?.nextCursor ?? null });
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Historique indisponible."); }
+    finally { setLoadingMore(false); }
+  }
+
+  async function loadOlderMessages(): Promise<void> {
+    if (!messagesCursor || !selectedConversationId || loadingMore) return;
+    const id = selectedConversationId;
+    setLoadingMore(true);
+    try {
+      const page = await api<{ items: MessageRecord[]; nextCursor: string | null }>(`/v1/conversations/${id}/messages?limit=50&cursor=${encodeURIComponent(messagesCursor)}`);
+      if (selectedConversationIdRef.current !== id) return;
+      setConversationMessages((current) => [...new Map([...page.items, ...current].map((item) => [item.id, item])).values()]);
+      setMessagesCursor(page.nextCursor);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Messages indisponibles."); }
+    finally { setLoadingMore(false); }
+  }
 
   async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     return apiClient.request<T>(path, init);
@@ -238,6 +283,10 @@ export default function App() {
       return;
     }
     if (organizationId === selectedOrg) return;
+    workspaceRequest.current += 1;
+    historyScope.current = "";
+    historyExpanded.current = false;
+    drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody;
     setLines([]);
     setSelectedLineId("");
     setContacts([]);
@@ -266,10 +315,17 @@ export default function App() {
       return;
     }
     if (lineId === selectedLineId) return;
+    workspaceRequest.current += 1;
+    historyScope.current = "";
+    historyExpanded.current = false;
+    drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody;
     setCalls([]);
     setConversations([]);
     setSelectedConversationId("");
     setConversationMessages([]);
+    setMessageDestination("");
+    setMessageBody("");
+    setHistoryCursors({ calls: null, conversations: null });
     setSelectedLineId(lineId);
   }
 
@@ -346,11 +402,13 @@ export default function App() {
 
   async function refreshWorkspace(orgId = selectedOrg) {
     if (!orgId) return;
+    const requestVersion = ++workspaceRequest.current;
     const [lineResponse, contactResponse, deviceResponse] = await Promise.all([
       api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`),
       api<{ items: Contact[] }>(`/v1/organizations/${orgId}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`),
       api<{ items: DeviceRecord[] }>("/v1/devices"),
     ]);
+    if (requestVersion !== workspaceRequest.current) return;
     setLines(lineResponse.items);
     setContacts(contactResponse.items);
     setDevices(deviceResponse.items);
@@ -359,19 +417,24 @@ export default function App() {
     setSelectedLineId(line?.id ?? "");
     if (line) {
       const [callResponse, conversationResponse] = await Promise.all([
-        api<{ items: CallRecord[] }>(`/v1/lines/${line.id}/calls?limit=20`),
-        api<{ items: Conversation[] }>(`/v1/lines/${line.id}/conversations?limit=50`),
+        assignment?.can_voice ? api<{ items: CallRecord[]; nextCursor: string | null }>(`/v1/lines/${line.id}/calls?limit=50`) : Promise.resolve({ items: [], nextCursor: null }),
+        assignment?.can_sms ? api<{ items: Conversation[]; nextCursor: string | null }>(`/v1/lines/${line.id}/conversations?limit=50`) : Promise.resolve({ items: [], nextCursor: null }),
       ]);
-      setCalls(callResponse.items);
-      setConversations(conversationResponse.items);
-      if (!conversationResponse.items.some((item) => item.id === selectedConversationId)) {
-        setSelectedConversationId(conversationResponse.items[0]?.id ?? "");
-      }
+      if (requestVersion !== workspaceRequest.current) return;
+      const preserveHistory = historyScope.current === line.id;
+      setCalls((current) => preserveHistory && assignment?.can_voice ? [...new Map([...current, ...callResponse.items].map((item) => [item.id, item])).values()] : callResponse.items);
+      setConversations((current) => preserveHistory && assignment?.can_sms ? [...new Map([...current, ...conversationResponse.items].map((item) => [item.id, item])).values()] : conversationResponse.items);
+      if (!preserveHistory || !historyExpanded.current) setHistoryCursors({ calls: callResponse.nextCursor, conversations: conversationResponse.nextCursor });
+      historyScope.current = line.id;
     } else {
       setCalls([]);
       setConversations([]);
       setSelectedConversationId("");
       setSelectedLineId("");
+      setMessageDestination("");
+      setConversationMessages([]);
+      setHistoryCursors({ calls: null, conversations: null });
+      historyScope.current = "";
     }
   }
 
@@ -389,7 +452,7 @@ export default function App() {
     if (!isCurrent()) return;
     setSelectedLineId(pending.line_id);
     setSelectedConversationId(pending.conversation_id);
-    setActiveTab("messages");
+    setActiveTab("conversations");
     setNotice("Un SMS précédent attend une vérification. Reprenez-la avant tout nouvel envoi.");
   }
 
@@ -483,26 +546,39 @@ export default function App() {
   }, [selectedLineId]);
 
   useEffect(() => {
+    if (!messageDestination || selectedConversationId) return;
+    const conversation = conversations.find((item) => item.lineId === activeLine?.id && phoneKey(item.remoteNumber) === phoneKey(messageDestination));
+    if (conversation) setSelectedConversationId(conversation.id);
+  }, [conversations, messageDestination, selectedConversationId, activeLine?.id]);
+
+  useEffect(() => {
     if (!selectedConversationId || !authToken) {
       setConversationMessages([]);
+      setMessagesCursor(null);
+      setMessagesState("ready");
       return;
     }
-    if (activeTab !== "messages") return;
+    if (activeTab !== "conversations") return;
     let disposed = false;
-    void api<{ items: MessageRecord[] }>(`/v1/conversations/${selectedConversationId}/messages?limit=50`)
-      .then(async ({ items }) => {
+    setConversationMessages([]);
+    setMessagesCursor(null);
+    setMessagesState("loading");
+    void api<{ items: MessageRecord[]; nextCursor: string | null }>(`/v1/conversations/${selectedConversationId}/messages?limit=50`)
+      .then(async ({ items, nextCursor }) => {
         if (disposed) return;
         setConversationMessages(items);
+        setMessagesCursor(nextCursor);
+        setMessagesState("ready");
         await api(`/v1/conversations/${selectedConversationId}/read`, {
           method: "PUT",
           body: JSON.stringify({ lastReadMessageId: items.at(-1)?.id ?? null }),
         });
         if (!disposed) setConversations((current) => current.map((conversation) => conversation.id === selectedConversationId ? { ...conversation, unread: false } : conversation));
       })
-      .catch((error: Error) => { if (!disposed) setNotice(error.message); });
+      .catch((error: Error) => { if (!disposed) { setMessagesState("error"); setNotice(error.message); } });
     return () => { disposed = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, selectedConversationId, activeTab]);
+  }, [authToken, selectedConversationId, activeTab, messageReload]);
 
   useEffect(() => {
     if (!supabase || !authToken || !selectedOrg) return;
@@ -527,18 +603,18 @@ export default function App() {
         void api<{ items: DeviceRecord[] }>("/v1/devices")
           .then(({ items }) => { if (!disposed) setDevices(items); }).catch(reportError);
       } else if (kind === "call" && activeLine?.id) {
-        void api<{ items: CallRecord[] }>(`/v1/lines/${activeLine.id}/calls?limit=20`)
-          .then(({ items }) => { if (!disposed) setCalls(items); }).catch(reportError);
+        void api<{ items: CallRecord[] }>(`/v1/lines/${activeLine.id}/calls?limit=50`)
+          .then(({ items }) => { if (!disposed) setCalls((current) => [...new Map([...current, ...items].map((item) => [item.id, item])).values()]); }).catch(reportError);
       } else if (kind === "message" && activeLine?.id) {
         void api<{ items: Conversation[] }>(`/v1/lines/${activeLine.id}/conversations?limit=50`)
-          .then(({ items }) => { if (!disposed) setConversations(items); }).catch(reportError);
+          .then(({ items }) => { if (!disposed) setConversations((current) => [...new Map([...current, ...items].map((item) => [item.id, item])).values()]); }).catch(reportError);
         const conversationId = selectedConversationIdRef.current;
         if (conversationId) {
           void api<{ items: MessageRecord[] }>(`/v1/conversations/${conversationId}/messages?limit=50`)
             .then(async ({ items }) => {
-              if (disposed) return;
-              setConversationMessages(items);
-              if (activeTabRef.current === "messages") {
+              if (disposed || selectedConversationIdRef.current !== conversationId) return;
+              setConversationMessages((current) => [...new Map([...current, ...items].map((item) => [item.id, item])).values()]);
+              if (activeTabRef.current === "conversations") {
                 await api(`/v1/conversations/${conversationId}/read`, {
                   method: "PUT",
                   body: JSON.stringify({ lastReadMessageId: items.at(-1)?.id ?? null }),
@@ -734,10 +810,11 @@ export default function App() {
     if (!selectedOrg) return;
     const phone = contactPhone.trim() ? normalizePhoneNumber(contactPhone) : null;
     if (contactPhone.trim() && !phone) {
-      setNotice("Saisissez un numéro international ou un numéro français à 10 chiffres.");
+      setContactFormError("Saisissez un numéro international ou un numéro français à 10 chiffres.");
       return;
     }
     setBusy(true);
+    setContactFormError("");
     try {
       const payload = JSON.stringify({ displayName: contactName.trim(), email: contactEmail.trim() || null, phones: phone ? [{ phoneNumber: phone, label: "Mobile" }] : [] });
       if (editingContact) {
@@ -751,15 +828,18 @@ export default function App() {
       setContactPhone("");
       setContactEmail("");
       await refreshWorkspace();
+      setContactEditorOpen(false);
       setNotice(wasEditing ? "Contact modifié." : "Contact ajouté au carnet partagé.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Le contact n'a pas pu être ajouté.");
+      setContactFormError(error instanceof Error ? error.message : "Le contact n’a pas pu être enregistré.");
     } finally {
       setBusy(false);
     }
   }
 
   function beginEditContact(contact: Contact) {
+    setContactEditorOpen(true);
+    setContactFormError("");
     setEditingContact(contact);
     setContactName(contact.display_name);
     setContactPhone(contact.contact_phones[0]?.phone_number ?? "");
@@ -787,6 +867,7 @@ export default function App() {
 
   async function sendMessage(event: React.FormEvent) {
     event.preventDefault();
+    if (smsSubmitting.current || !messageBody.trim()) return;
     if (smsRecoveryState !== "ready") {
       setNotice("Les envois SMS précédents doivent être vérifiés avant un nouvel envoi.");
       return;
@@ -803,6 +884,7 @@ export default function App() {
       setNotice("Le SMS précédent a un résultat incertain. Vérifiez-le avant de modifier ou renvoyer le texte.");
       return;
     }
+    smsSubmitting.current = true;
     const isRetry = Boolean(pendingSmsAttempt);
     const idempotencyKey = pendingSmsAttempt?.key ?? crypto.randomUUID();
     if (!pendingSmsAttempt) setPendingSmsAttempt({ signature, key: idempotencyKey });
@@ -818,6 +900,7 @@ export default function App() {
     } catch (error) {
       if (!isRetry && error instanceof ApiClientError && error.status >= 400 && error.status < 500) setPendingSmsAttempt(null);
       setNotice(error instanceof Error ? error.message : "Le message n’a pas pu être préparé.");
+      smsSubmitting.current = false;
       setBusy(false);
       return;
     }
@@ -832,13 +915,15 @@ export default function App() {
       } else {
         setPendingSmsAttempt(null);
         setMessageBody("");
-        setNotice(result.status === "submitting" ? "Twilio a accepté le message; la remise est en attente." : "Message envoyé à Twilio.");
+        delete drafts.current[`${activeLine.id}:${phoneKey(normalizedDestination)}`];
+        setNotice("Message transmis. La livraison sera indiquée dans la conversation.");
     }
     try {
       await refreshWorkspace();
       const messages = await api<{ items: MessageRecord[] }>(`/v1/conversations/${result.conversationId}/messages?limit=50`);
-      setConversationMessages(messages.items);
+      if (selectedConversationIdRef.current === result.conversationId) setConversationMessages((current) => [...new Map([...current, ...messages.items].map((item) => [item.id, item])).values()]);
     } catch { /* Keep the send result visible; the next refresh will reload persisted data. */ }
+    smsSubmitting.current = false;
     setBusy(false);
   }
 
@@ -846,14 +931,14 @@ export default function App() {
     switch (event.type) {
       case "ready": void setVoiceRegistration(true); setVoiceStatus("Prête à appeler"); break;
       case "unavailable": void setVoiceRegistration(false); setVoiceStatus(event.message); setNotice(event.message); break;
-      case "incoming": setIncomingFrom(event.from); setVoiceStatus("Appel entrant"); break;
+      case "incoming": setDestination(event.from); setIncomingFrom(event.from); setVoiceState("ringing"); setDialerOpen(true); setVoiceStatus("Appel entrant"); break;
       case "connecting": setVoiceState("connecting"); setVoiceStatus("Connexion en cours…"); break;
       case "ringing": setVoiceState("ringing"); setVoiceStatus("Le destinataire sonne…"); break;
       case "active": setVoiceState("active"); setIncomingFrom(""); setVoiceStatus("En communication"); break;
       case "reconnecting": setVoiceStatus("Reconnexion de l’appel…"); break;
       case "reconnected": setVoiceState("active"); setVoiceStatus("En communication"); break;
       case "ended":
-        setVoiceState("idle"); setIncomingFrom(""); setMuted(false);
+        setVoiceState("idle"); setIncomingFrom(""); setMuted(false); setDialerOpen(false);
         setVoiceStatus(event.reason === "completed" ? "Appel terminé" : "Appel interrompu");
         if (selectedOrg) {
           const refreshStartedAt = Date.now();
@@ -928,148 +1013,79 @@ export default function App() {
     }
   }
 
-  function callStatus(status: string): string {
-    return ({ initiated: "Préparation", ringing: "Sonnerie", answered: "En cours", completed: "Terminé", missed: "Manqué", failed: "Échec", canceled: "Annulé" } as Record<string, string>)[status] ?? status;
-  }
-
-  if (!ready) return <div className="boot-screen"><span className="brand-mark">o</span><span>Préparation de votre espace…</span></div>;
+  if (!ready) return <div className="boot-screen"><span className="brand-mark">o</span><span>Ouverture de votre espace…</span></div>;
 
   if (!session || passwordRecovery) return (
     <main className="auth-shell">
+      <a className="brand auth-brand" href="/" aria-label="Onoff, accueil"><span className="brand-mark">o</span><span>onoff</span></a>
       <section className="auth-panel">
-        <a className="brand" href="#"><span className="brand-mark">o</span><span>onoff</span></a>
-        <div className="auth-copy">
-          <span className="eyebrow">ESPACE DE TRAVAIL</span>
-          <h1>{passwordRecovery ? <>Choisissez un<br /><em>nouveau mot de passe.</em></> : <>Votre ligne.<br /><em>Partout avec vous.</em></>}</h1>
-          <p>{passwordRecovery ? "Votre lien a été vérifié. Définissez un nouveau mot de passe." : "Connectez-vous à votre espace téléphonique sécurisé."}</p>
-        </div>
+        <div className="auth-copy"><span className="auth-eyebrow">VOTRE ESPACE ONOFF</span><h1>{passwordRecovery ? "Nouveau mot de passe" : "Reprenons le fil."}</h1><p>{passwordRecovery ? "Choisissez votre nouveau mot de passe." : "Vos conversations vous attendent."}</p></div>
         <form className="auth-form" onSubmit={passwordRecovery ? updateRecoveredPassword : signIn}>
-          {passwordRecovery ? (
-            <label>Nouveau mot de passe<input autoComplete="new-password" type="password" minLength={8} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required placeholder="8 caractères minimum" /></label>
-          ) : (
-            <>
-              <label>Email professionnel<input autoComplete="username" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="nom@entreprise.com" /></label>
-              <label>Mot de passe<input autoComplete="current-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="Votre mot de passe" /></label>
-            </>
-          )}
+          {passwordRecovery ? <label className="field-label">Nouveau mot de passe<input autoComplete="new-password" type="password" minLength={8} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required placeholder="8 caractères minimum" /></label> : <><label className="field-label">Email professionnel<input autoComplete="username" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="nom@entreprise.com" /></label><label className="field-label">Mot de passe<input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required placeholder="Votre mot de passe" /></label></>}
           {authError && <p className="form-error" role="status">{authError}</p>}
-          {!supabase && <p className="form-note">Renseignez les variables VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY pour activer la connexion.</p>}
-          <button className="button button-primary button-wide" disabled={busy || !supabase}>{busy ? "Enregistrement…" : passwordRecovery ? "Enregistrer le mot de passe" : "Se connecter"}<span>→</span></button>
+          {!supabase && <p className="form-note">La connexion n’est pas encore configurée pour cet environnement.</p>}
+          <button className="button button-primary button-wide" disabled={busy || !supabase}>{busy ? "Connexion…" : passwordRecovery ? "Enregistrer le mot de passe" : "Se connecter"}<ArrowRight size={18} /></button>
           {!passwordRecovery && <button type="button" className="auth-link" disabled={busy || !supabase} onClick={() => void sendPasswordReset()}>Mot de passe oublié ?</button>}
         </form>
-        <p className="auth-foot">Accès privé · Comptes créés par un administrateur</p>
       </section>
-      <aside className="auth-visual">
-        <div className="visual-orbit orbit-one" /><div className="visual-orbit orbit-two" />
-        <div className="phone-card"><div className="phone-top"><span>Appel en cours</span><span className="signal"><i /><i /><i /></span></div><div className="phone-avatar">AM</div><strong>Alex Martin</strong><small>+32 470 00 00 00</small><div className="call-wave"><i /><i /><i /><i /><i /><i /><i /><i /><i /></div><div className="call-buttons"><span>⌕</span><span>◉</span><b>⌕</b></div><div className="call-timer">04:32</div></div>
-        <div className="visual-caption"><span className="live-dot" /> Tous vos appareils, une seule ligne.</div>
-        <div className="visual-grid grid-top" /><div className="visual-grid grid-bottom" />
-      </aside>
+      <p className="auth-foot">Accès privé · Comptes créés par un administrateur</p>
     </main>
   );
 
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a className="brand" href="#"><span className="brand-mark">o</span><span>onoff</span></a>
-        <div className="workspace-select"><span className="workspace-icon">{(organizations.find((item) => item.organization_id === selectedOrg)?.organizations?.name ?? "O").slice(0, 1).toUpperCase()}</span><span className="workspace-name"><b>{organizations.find((item) => item.organization_id === selectedOrg)?.organizations?.name ?? "Espace"}</b><small>Équipe</small></span>{organizations.length > 1 ? <select className="workspace-select-control" aria-label="Organisation active" value={selectedOrg} disabled={voiceState !== "idle" || Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} onChange={(event) => selectOrganization(event.target.value)}>{organizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations?.name ?? "Espace"}</option>)}</select> : <span className="chevron">⌄</span>}</div>
-        <div className="side-label">ESPACE DE TRAVAIL</div>
-        <nav className="main-nav" aria-label="Navigation principale">
-          <button aria-current={activeTab === "activity" ? "page" : undefined} className={activeTab === "activity" ? "nav-item selected" : "nav-item"} onClick={() => setActiveTab("activity")}><span className="nav-icon" aria-hidden="true">◷</span>Activité</button>
-          <button aria-current={activeTab === "messages" ? "page" : undefined} className={activeTab === "messages" ? "nav-item selected" : "nav-item"} onClick={() => setActiveTab("messages")}><span className="nav-icon" aria-hidden="true">▤</span>Messages<span className="nav-count">{conversations.length}</span></button>
-          <button aria-current={activeTab === "contacts" ? "page" : undefined} className={activeTab === "contacts" ? "nav-item selected" : "nav-item"} onClick={() => setActiveTab("contacts")}><span className="nav-icon" aria-hidden="true">♙</span>Contacts</button>
-          <button aria-current={activeTab === "settings" ? "page" : undefined} className={activeTab === "settings" ? "nav-item selected" : "nav-item"} onClick={() => setActiveTab("settings")}><span className="nav-icon" aria-hidden="true">⚙</span>Réglages</button>
-        </nav>
-        <div className="sidebar-bottom"><div className="profile"><div className="profile-avatar">{session.user.email?.slice(0, 1).toUpperCase() ?? "U"}</div><div className="profile-copy"><b>{session.user.email}</b><small>Compte de démonstration</small></div><button aria-label="Se déconnecter" className="logout" onClick={() => void supabase?.auth.signOut()}>↗</button></div></div>
-      </aside>
-      <main className="main-area">
-        <header className="topbar"><div className="breadcrumbs">Espace de travail <span aria-hidden="true">/</span> <b>{activeTab === "contacts" ? "Contacts" : activeTab === "messages" ? "Messages" : activeTab === "settings" ? "Réglages" : "Activité"}</b></div><div className="top-actions"><div className="status-pill" role="status" aria-live="polite"><i aria-hidden="true" /> {voiceStatus}</div><button type="button" className="icon-button" aria-label="Notifications, non disponible dans ce prototype" disabled>♧<span /></button><button type="button" className="help-button" aria-label="Aide, non disponible dans ce prototype" disabled>? <span>Aide</span></button></div></header>
-        <div className="page-content">
-          <div className="page-heading"><div><span className="eyebrow">VOTRE TÉLÉPHONIE PROFESSIONNELLE</span><h1>{activeTab === "contacts" ? "Vos contacts" : activeTab === "messages" ? "Vos messages" : activeTab === "settings" ? "Vos appareils" : "Bonjour, bienvenue."}</h1><p>{activeTab === "contacts" ? "Un carnet partagé avec toute votre équipe." : activeTab === "messages" ? "Vos conversations, synchronisées sur vos appareils." : activeTab === "settings" ? "Consultez et révoquez les appareils associés à votre compte." : "Retrouvez votre activité et gérez votre ligne."}</p></div><div className="heading-date"><span className="date-icon">◷</span><span>{todayLabel}</span></div></div>
-          {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Fermer">×</button></div>}
-          {!networkOnline && <div className="notice notice-warning" role="alert">Connexion réseau indisponible. Les données affichées peuvent être anciennes; les nouvelles actions nécessitent une connexion.</div>}
-          {workspaceState === "loading" && <div className="notice" role="status" aria-live="polite">Chargement des données de votre espace…</div>}
-          {workspaceState === "error" && <div className="notice notice-error" role="alert">L’espace n’a pas pu être actualisé. <button disabled={!networkOnline} onClick={() => window.location.reload()}>Réessayer</button></div>}
-          <section className="line-banner"><div className="line-copy"><span className="line-label"><i /> LIGNE ACTIVE</span><h2>{activeLine?.phone_number ?? "Aucune ligne attribuée"}</h2><p>{activeLine ? "Appels et messages de votre équipe" : "Demandez à un administrateur de vous attribuer une ligne."}</p></div><div className="line-meta">{lines.filter((item) => item.lines).length > 1 && <select className="line-selector" aria-label="Ligne active" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} onChange={(event) => selectLine(event.target.value)}>{lines.filter((item) => item.lines).map((item) => <option key={item.lines!.id} value={item.lines!.id}>{item.lines!.phone_number}</option>)}</select>}<span className="line-badge">{activeLine?.voice_enabled && activeAssignment?.can_voice ? "Voix activée" : "Voix en attente"}</span><span className="line-badge muted">{activeLine?.sms_enabled && activeAssignment?.can_sms ? "SMS activés" : "SMS en attente"}</span></div><div className="banner-decoration">◌</div></section>
-          {activeTab === "contacts" ? (
-            <ContactPanel
-              contacts={contacts}
-              dataState={workspaceState}
-              busy={busy}
-              search={contactSearch}
-              editing={editingContact}
-              name={contactName}
-              email={contactEmail}
-              phone={contactPhone}
-              onSearch={setContactSearch}
-              onName={setContactName}
-              onEmail={setContactEmail}
-              onPhone={setContactPhone}
-              onSubmit={createContact}
-              onCancel={() => { setEditingContact(null); setContactName(""); setContactPhone(""); setContactEmail(""); }}
-              onEdit={beginEditContact}
-              onArchive={(contact) => { if (window.confirm(`Archiver ${contact.display_name} ?`)) void archiveContact(contact); }}
-              onCall={(contact) => { setDestination(contact.contact_phones[0]?.phone_number ?? ""); setActiveTab("activity"); }}
-              onMessage={(contact) => { const phone = contact.contact_phones[0]?.phone_number ?? ""; setMessageDestination(phone); setSelectedConversationId(conversations.find((item) => item.remoteNumber === phone)?.id ?? ""); setActiveTab("messages"); }}
-            />
-          ) : activeTab === "messages" ? (
-            <section className="messages-workspace">
-              {smsRecoveryState === "checking" && <div className="notice" role="status">Vérification des SMS en cours…</div>}
-              {smsRecoveryState === "unavailable" && <div className="notice" role="alert">Impossible de vérifier les SMS précédents. <button onClick={() => void retrySmsRecovery()}>Réessayer</button></div>}
-              <aside className="content-card conversation-panel">
-                <div className="section-heading"><div><span className="eyebrow">MESSAGERIE</span><h2>Conversations</h2></div><span className="subtle-count">{conversations.length}</span></div>
-                {conversations.length ? <div className="conversation-list">{conversations.map((conversation) => (
-                  <button aria-pressed={selectedConversationId === conversation.id} className={selectedConversationId === conversation.id ? "conversation-item selected" : "conversation-item"} key={conversation.id} disabled={Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} onClick={() => { setSelectedConversationId(conversation.id); setMessageDestination(conversation.remoteNumber); }}>
-                    <span className="contact-avatar">{(conversation.remoteContactName ?? conversation.remoteNumber).slice(-2)}</span><span className="conversation-copy"><b>{conversation.remoteContactName ?? conversation.remoteNumber}</b><small>{conversation.remoteContactName ? `${conversation.remoteNumber} · ` : ""}{conversation.lastMessage?.body ?? "Aucun message"}</small></span>
-                    {conversation.unread && <span className="unread-badge" aria-label="Non lu">Non lu</span>}
-                    {conversation.lastMessage && <small className="conversation-time">{new Date(conversation.lastMessage.created_at).toLocaleDateString("fr-BE")}</small>}
-                  </button>
-                ))}</div> : <div className="empty-state compact" role={workspaceState === "loading" ? "status" : undefined}><span className="empty-icon" aria-hidden="true">▤</span><b>{workspaceState === "loading" ? "Chargement des conversations…" : workspaceState === "error" ? "Conversations indisponibles" : "Aucune conversation"}</b><p>{workspaceState === "loading" ? "Récupération des messages de votre ligne." : workspaceState === "error" ? "Vérifiez la connexion puis actualisez l’espace." : "Un premier SMS créera la conversation."}</p></div>}
-              </aside>
-              <section className="content-card message-thread">
-                <div className="section-heading"><div><span className="eyebrow">CONVERSATION</span><h2>{(selectedConversationContactName ?? messageDestination) || "Nouveau message"}</h2>{selectedConversationContactName && <small>{messageDestination}</small>}</div><span className={activeLine?.sms_enabled && activeAssignment?.can_sms ? "line-badge" : "line-badge muted"}>{activeLine?.sms_enabled && activeAssignment?.can_sms ? "SMS activés" : "SMS en attente"}</span></div>
-                <div className="message-list" aria-live="polite" aria-relevant="additions text">
-                  {conversationMessages.length ? conversationMessages.map((message) => <article className={`message-bubble ${message.direction}`} key={message.id}><p>{message.body}</p><small>{new Date(message.created_at).toLocaleTimeString("fr-BE", { hour: "2-digit", minute: "2-digit" })}{message.direction === "outbound" ? ` · ${{ submitting: "Envoi…", pending: "En attente", unknown: "Vérification", sent: "Envoyé", delivered: "Livré", undelivered: "Non livré", failed: "Échec" }[message.status] ?? message.status}` : ""}</small></article>) : <div className="empty-state compact" role={workspaceState === "loading" ? "status" : undefined}><span className="empty-icon" aria-hidden="true">▤</span><b>{workspaceState === "loading" ? "Chargement des messages…" : workspaceState === "error" ? "Messages indisponibles" : "Aucun message affiché"}</b><p>{workspaceState === "loading" ? "Récupération de la conversation." : workspaceState === "error" ? "Vérifiez la connexion puis actualisez l’espace." : "Sélectionnez une conversation ou écrivez à un numéro."}</p></div>}
-                </div>
-                <form className="message-compose" onSubmit={sendMessage}>
-                  <label>Destinataire<input inputMode="tel" value={messageDestination} disabled={Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} onChange={(event) => setMessageDestination(event.target.value)} placeholder="+32 470 00 00 00" /></label>
-                  <label>Message<textarea value={messageBody} disabled={Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} onChange={(event) => setMessageBody(event.target.value)} maxLength={1600} rows={3} placeholder="Écrire un message…" /></label>
-                  <div className="message-compose-footer"><small>{pendingSmsAttempt ? "Résultat incertain : vérifiez l’envoi avec la même demande." : `${messageBody.length}/1600 caractères`} · {smsSegmentInfo.encoding} · {smsSegmentInfo.characterCount} unités · {smsSegmentInfo.segments} segment{smsSegmentInfo.segments === 1 ? "" : "s"} estimé{smsSegmentInfo.segments === 1 ? "" : "s"} · le statut livré dépend du réseau destinataire</small><button className="button button-primary" disabled={busy || smsRecoveryState !== "ready" || !messageBody.trim() || !activeLine?.sms_enabled || !activeAssignment?.can_sms}>{busy ? "Vérification…" : pendingSmsAttempt ? "Vérifier l’envoi" : smsRecoveryState !== "ready" ? "Vérification…" : "Envoyer"}<span>↑</span></button></div>
-                </form>
-              </section>
-            </section>
-          ) : activeTab === "settings" ? (
-            <section className="content-card device-settings">
-              <div className="section-heading"><div><span className="eyebrow">SÉCURITÉ DU COMPTE</span><h2>Appareils enregistrés</h2></div><span className="subtle-count">{devices.filter((device) => device.organization_id === selectedOrg && device.status === "active").length} actifs</span></div>
-              <div className="settings-account"><span>{session.user.email}</span>{organizations.length > 1 ? <select aria-label="Organisation active" value={selectedOrg} disabled={voiceState !== "idle" || Boolean(pendingSmsAttempt)} onChange={(event) => selectOrganization(event.target.value)}>{organizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations?.name ?? "Espace"}</option>)}</select> : <span>{organizations[0]?.organizations?.name ?? "Espace de travail"}</span>}<button className="button device-revoke" disabled={Boolean(pendingSmsAttempt)} onClick={() => void supabase?.auth.signOut()}>Se déconnecter</button></div>
-              <p className="settings-status">État vocal de cet onglet : <b>{voiceStatus}</b>. Un seul onglet du profil garde la ligne enregistrée; si cet onglet se ferme, le suivant reprend la ligne.</p>
-              <div className="device-list">
-                {devices.filter((device) => device.organization_id === selectedOrg).map((device) => (
-                  <article className="device-row" key={device.id}>
-                    <span className="device-icon" aria-hidden="true">{device.platform === "web" ? "▣" : "▱"}</span>
-                    <span className="device-copy">
-                      <b>{device.label || device.platform}</b>
-                      <small>{device.platform} · {device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · vu ${new Date(device.last_active_at).toLocaleString("fr-BE", { dateStyle: "short", timeStyle: "short" })}` : ""}</small>
-                    </span>
-                    {device.status === "active" && <button className="button device-revoke" disabled={busy} onClick={() => void revokeDevice(device.id)}>Révoquer</button>}
-                  </article>
-                ))}
-                {devices.filter((device) => device.organization_id === selectedOrg).length === 0 && (
-                  <div className="empty-state compact" role={workspaceState === "loading" ? "status" : undefined}>
-                    <span className="empty-icon" aria-hidden="true">▣</span>
-                    <b>{workspaceState === "loading" ? "Chargement des appareils…" : workspaceState === "error" ? "Appareils indisponibles" : "Aucun appareil enregistré"}</b>
-                    <p>{workspaceState === "loading" ? "Récupération des appareils du compte." : workspaceState === "error" ? "Vérifiez la connexion puis actualisez l’espace." : "Un appareil sera associé lors de la première activation de la ligne vocale."}</p>
-                  </div>
-                )}
-              </div>
-              <p className="settings-status">Version de l’application Web : <b>{webPackage.version}</b></p>
-            </section>
-          ) : (
-            <><section className="stats-grid"><article className="stat-card"><div className="stat-icon icon-call">↗</div><span>Appels récents</span><strong>{calls.length}</strong><small>Sur la ligne sélectionnée</small></article><article className="stat-card"><div className="stat-icon icon-contact">♙</div><span>Contacts</span><strong>{contacts.length}</strong><small>Dans votre organisation</small></article><article className="stat-card"><div className="stat-icon icon-message">▤</div><span>Conversations</span><strong>{conversations.length}</strong><small>Sur la ligne sélectionnée</small></article></section><section className="dashboard-grid"><div className="content-card recent-card"><div className="section-heading"><div><span className="eyebrow">VOTRE JOURNÉE</span><h2>Activité récente</h2></div></div>{calls.length ? <div className="recent-call-list">{calls.slice(0, 8).map((call) => <div className="recent-call-row" key={call.id}><span className={`recent-call-icon ${call.direction}`} aria-hidden="true">{call.direction === "outbound" ? "↗" : "↙"}</span><div className="recent-call-copy"><b>{call.remoteContactName ?? call.remote_number}</b><small>{call.remoteContactName ? `${call.remote_number} · ` : ""}{call.direction === "outbound" ? "Appel sortant" : "Appel entrant"} · {new Date(call.created_at).toLocaleString("fr-BE", { dateStyle: "short", timeStyle: "short" })}</small></div><span className="recent-call-status">{callStatus(call.status)}</span></div>)}</div> : <div className="empty-state compact"><span className="empty-icon">◷</span><b>{workspaceState === "loading" ? "Chargement des appels…" : workspaceState === "error" ? "Historique indisponible" : "Aucun appel pour le moment"}</b><p>{workspaceState === "loading" ? "Récupération de l’activité de votre ligne." : workspaceState === "error" ? "Vérifiez la connexion puis actualisez l’espace." : "Les appels de votre ligne apparaîtront ici."}</p></div>}</div><div className="content-card compose-card"><div className="section-heading"><div><span className="eyebrow">NOUVEL APPEL</span><h2>Composer</h2></div><span className="compose-icon" aria-hidden="true">⌕</span></div><label className="number-entry"><span>Numéro de téléphone</span><input inputMode="tel" value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="+32 470 00 00 00" disabled={voiceState !== "idle" || !voiceTabOwner} /></label>{destinationContact && <p className="compose-hint" role="status">Contact de votre organisation : {destinationContact.display_name}</p>}<div className="dial-pad" role="group" aria-label="Clavier téléphonique">{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit, index) => <button type="button" key={digit} aria-label={voiceState === "active" ? `Envoyer la tonalité ${digit}` : `Ajouter ${digit} au numéro`} disabled={!voiceTabOwner || (voiceState === "idle" && (digit === "#" || digit === "*"))} onClick={() => voiceState === "active" ? voiceClient.current?.sendDigits(digit) : setDestination((value) => `${value}${digit}`)}>{digit}{index > 0 && index < 9 && <small aria-hidden="true">{["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ"][index]}</small>}</button>)}</div>{voiceState === "idle" ? <button className="button button-call button-wide" disabled={!voiceTabOwner || !destination || busy || !activeLine?.voice_enabled || !activeAssignment?.can_voice} onClick={() => void startVoiceCall()}><span aria-hidden="true">⌕</span>{busy ? "Préparation…" : "Appeler"}</button> : <div className="voice-active-controls"><p role="status">{incomingFrom ? `Appel entrant de ${incomingFrom}` : voiceStatus}</p>{incomingFrom && <div className="voice-action-row"><button className="button button-primary" onClick={() => voiceClient.current?.acceptCall()}>Répondre</button><button className="button" onClick={() => voiceClient.current?.rejectCall()}>Refuser</button></div>}{voiceState === "active" && <div className="voice-action-row"><button aria-pressed={muted} className={muted ? "button button-primary" : "button"} onClick={() => voiceClient.current?.setMuted(!muted)}>{muted ? "Rétablir le son" : "Muet"}</button><button className="button button-danger" onClick={() => voiceClient.current?.hangUp()}>Raccrocher</button></div>}</div>}<p className="compose-hint">{activeLine?.voice_enabled && activeAssignment?.can_voice ? voiceStatus : "Les appels sont désactivés dans cet environnement."}</p></div></section></>
-          )}
-          <footer className="page-footer"><span>onoff <b>·</b> Prototype privé</span><span>Vos données sont synchronisées en toute sécurité.</span></footer>
-        </div>
-      </main>
-    </div>
-  );
+  const activeDevices = devices.filter((device) => device.organization_id === selectedOrg);
+  const unreadCount = conversations.filter((conversation) => conversation.unread).length;
+  const duplicateContact = normalizePhoneNumber(contactPhone) ? contacts.find((contact) => contact.id !== editingContact?.id && contact.contact_phones.some((phone) => phone.phone_number === normalizePhoneNumber(contactPhone))) : null;
+  const sectionTitle = activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
+  const lineOptions = lines.filter((item) => item.lines);
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setActiveTab("conversations"); }} aria-label="Onoff, conversations"><span className="brand-mark">o</span><span>onoff</span></a>
+      <div className="workspace-switch"><span className="workspace-initial">{organizationName.slice(0, 1)}</span>{organizations.length > 1 ? <select aria-label="Organisation active" value={selectedOrg} disabled={voiceState !== "idle" || conversationLocked} onChange={(event) => selectOrganization(event.target.value)}>{organizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations?.name ?? "Mon espace"}</option>)}</select> : <span>{organizationName}</span>}</div>
+      <nav className="main-nav" aria-label="Navigation principale">
+        <button className={`nav-item${activeTab === "conversations" ? " selected" : ""}`} aria-current={activeTab === "conversations" ? "page" : undefined} onClick={() => setActiveTab("conversations")}><ChatCircle size={20} /><span>Conversations</span>{unreadCount > 0 && <span className="nav-count">{unreadCount}</span>}</button>
+        <button className={`nav-item${activeTab === "contacts" ? " selected" : ""}`} aria-current={activeTab === "contacts" ? "page" : undefined} onClick={() => setActiveTab("contacts")}><Users size={20} /><span>Contacts</span></button>
+        <button className={`nav-item mobile-settings${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="sidebar-line"><span className="side-label">VOTRE LIGNE</span>{lineOptions.length > 1 ? <select aria-label="Ligne active" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || conversationLocked} onChange={(event) => selectLine(event.target.value)}>{lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>)}</select> : <strong>{activeLine ? formatPhone(activeLine.phone_number) : "Aucune ligne attribuée"}</strong>}<span className="line-availability"><i className={voiceTabOwner && voiceRegisteredRef.current ? "available" : ""} />{voiceTabOwner && voiceRegisteredRef.current ? "Disponible pour les appels" : activeLine ? "Appels en attente" : "Ajoutez une ligne pour commencer"}</span>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={14} />Ajouter une ligne</button>}</div>
+        <button className={`nav-item${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
+        <button className="profile-button" onClick={() => setActiveTab("settings")}><Avatar name={session.user.email ?? "Moi"} /><span><b>{session.user.email?.split("@")[0] ?? "Mon compte"}</b><small>{canPurchaseNumber ? "Administrateur" : "Membre de l’équipe"}</small></span></button>
+      </div>
+    </aside>
+
+    <main className="main-area">
+      <header className="topbar"><div className="topbar-title"><h1>{sectionTitle}</h1><span>{organizationName}</span></div><div className="topbar-actions"><button className="icon-button" aria-label="Actualiser l’espace" title="Actualiser" disabled={workspaceState === "loading"} onClick={() => void retryWorkspace()}><ArrowClockwise size={18} /></button><button className="button button-secondary" onClick={() => openCall()}><Phone size={17} /><span>{voiceState !== "idle" || incomingFrom ? "Appel en cours" : "Nouvel appel"}</span></button></div></header>
+      <div className="mobile-line-switch"><label>Votre ligne<select aria-label="Ligne active sur mobile" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || conversationLocked || !lineOptions.length} onChange={(event) => selectLine(event.target.value)}>{lineOptions.length ? lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>) : <option value="">Aucune ligne attribuée</option>}</select></label></div>
+      {!networkOnline && <div className="app-banner warning" role="status"><WarningCircle size={18} /><span>Vous êtes hors ligne. Reconnectez-vous pour retrouver vos échanges.</span></div>}
+      {notice && <div className="app-banner" role="status"><ChatCircle size={18} /><span>{notice}</span><button className="icon-button" aria-label="Fermer le message" onClick={() => setNotice("")}><X size={16} /></button></div>}
+      {smsRecoveryState === "unavailable" && <div className="app-banner warning" role="alert"><WarningCircle size={18} /><span>Impossible de vérifier les SMS précédents.</span><button className="text-button" onClick={() => void retrySmsRecovery()}>Réessayer</button></div>}
+      {!activeLine && workspaceState === "ready" && <div className="app-banner"><Phone size={18} /><span>{canPurchaseNumber ? "Ajoutez votre première ligne pour commencer à échanger." : "Demandez à votre administrateur de vous attribuer une ligne."}</span>{canPurchaseNumber && <button className="text-button" onClick={() => setNumberPurchaseOpen(true)}>Ajouter une ligne</button>}</div>}
+
+      {activeTab === "conversations" ? <Conversations
+        inbox={inbox} contacts={contacts} number={messageDestination} lineNumber={activeLine?.phone_number ?? ""}
+        messages={conversationMessages} body={messageBody} dataState={workspaceState} messagesState={messagesState}
+        busy={busy || smsRecoveryState !== "ready"} locked={conversationLocked} pending={Boolean(pendingSmsAttempt)}
+        canSms={canSms} canCall={canCall && voiceState === "idle"} segments={smsSegmentInfo.segments}
+        hasMore={Boolean(historyCursors.calls || historyCursors.conversations)} hasOlderMessages={Boolean(messagesCursor)} loadingMore={loadingMore}
+        onMore={() => void loadMoreHistory()} onOlderMessages={() => void loadOlderMessages()}
+        onOpen={openConversation} onNew={() => setNewConversationOpen(true)}
+        onBack={() => { drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody; setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); }}
+        onBody={setMessageBody} onSend={sendMessage} onCall={openCall} onAddContact={newContact} onRetry={() => void retryWorkspace()}
+      /> : activeTab === "contacts" ? <Contacts contacts={contacts} search={contactSearch} busy={busy || conversationLocked} dataState={workspaceState} onSearch={setContactSearch} onAdd={() => newContact()} onEdit={beginEditContact} onArchive={(contact) => void archiveContact(contact)} onCall={(contact) => openCall(contact.contact_phones[0]?.phone_number)} onMessage={(contact) => openConversation(contact.contact_phones[0]?.phone_number ?? "")} /> : <section className="settings-page">
+        <div className="section-intro"><div><h2>Votre espace de travail</h2><p>Votre compte, vos lignes et vos appareils.</p></div></div>
+        <section className="settings-section"><h3>Mon compte</h3><div className="account-row"><Avatar name={session.user.email ?? "Moi"} /><div><b>{session.user.email}</b><p>{organizationName}</p></div><button className="button button-secondary" disabled={Boolean(pendingSmsAttempt) || voiceState !== "idle"} onClick={() => void supabase?.auth.signOut()}><SignOut size={17} />Se déconnecter</button></div></section>
+        <section className="settings-section"><div className="settings-section-heading"><h3>Mes lignes</h3>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={16} />Ajouter une ligne</button>}</div>{lineOptions.map((item) => <div className="settings-line-row" key={item.lines!.id}><Phone size={21} /><div><b>{formatPhone(item.lines!.phone_number)}</b><p>{item.can_voice && item.lines!.voice_enabled ? "Appels activés" : "Appels indisponibles"} · {item.can_sms && item.lines!.sms_enabled ? "SMS activés" : "SMS indisponibles"}</p></div>{item.lines!.id === activeLine?.id ? <span className="selected-line"><CheckCircle size={16} />Sélectionnée</span> : <button className="button button-secondary" disabled={conversationLocked || voiceState !== "idle"} onClick={() => selectLine(item.lines!.id)}>Utiliser cette ligne</button>}</div>)}{!lineOptions.length && <p className="settings-description">Aucune ligne attribuée pour le moment.</p>}</section>
+        <section className="settings-section"><div className="settings-section-heading"><h3>Appareils connectés</h3><span>{activeDevices.filter((device) => device.status === "active").length} actifs</span></div><p className="settings-description">Gérez les appareils autorisés à utiliser votre compte.</p>{activeDevices.map((device) => <div className="device-row" key={device.id}><span className="device-icon">{device.platform === "web" ? <Monitor /> : <DeviceMobile />}</span><div><b>{device.label || device.platform}</b><p>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${new Date(device.last_active_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : ""}</p></div>{device.status === "active" && <button className="text-button danger-text" disabled={busy || voiceState !== "idle"} onClick={() => void revokeDevice(device.id)}>Révoquer</button>}</div>)}{!activeDevices.length && <EmptyState icon={<Monitor size={26} />} title="Aucun appareil enregistré"><p>Votre navigateur sera associé lors de l’activation des appels.</p></EmptyState>}</section>
+        <section className="settings-section"><h3>État des appels</h3><p className="voice-settings-status"><Microphone size={17} />{voiceStatus}</p><p className="settings-description">Un seul onglet reçoit vos appels à la fois. Si vous le fermez, un autre onglet ouvert prend le relais.</p></section>
+        <p className="settings-version">onoff · Version {webPackage.version}</p>
+      </section>}
+    </main>
+
+    {(voiceState !== "idle" || incomingFrom) && !dialerOpen && <button className="active-call-bar" onClick={() => setDialerOpen(true)}><Phone size={19} /><span>{incomingFrom ? "Appel entrant" : voiceStatus}</span><ArrowRight size={17} /></button>}
+    {newConversationOpen && <NewConversation contacts={contacts} onClose={() => setNewConversationOpen(false)} onOpen={(number) => openConversation(number)} />}
+    {dialerOpen && <CallDialog number={destination} name={destinationContact?.display_name ?? null} line={activeLine?.phone_number ?? "non attribuée"} status={voiceStatus} state={voiceState} incoming={incomingFrom} muted={muted} enabled={canCall} busy={busy} onNumber={setDestination} onClose={() => setDialerOpen(false)} onCall={() => void startVoiceCall()} onAccept={() => voiceClient.current?.acceptCall()} onReject={() => voiceClient.current?.rejectCall()} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigit={(digit) => voiceClient.current?.sendDigits(digit)} />}
+    {contactEditorOpen && <Modal title={editingContact ? "Modifier le contact" : "Ajouter un contact"} onClose={() => setContactEditorOpen(false)} busy={busy}><form className="contact-form" onSubmit={createContact}><label className="field-label">Nom du contact<input autoFocus value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Prénom Nom" required maxLength={120} /></label><label className="field-label">Téléphone<input inputMode="tel" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} placeholder="+33 6 12 34 56 78" /></label>{duplicateContact && <p className="inline-warning" role="status">Ce numéro est déjà associé à {duplicateContact.display_name}.</p>}<label className="field-label">Email <span className="optional-label">(facultatif)</span><input type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="nom@entreprise.com" /></label>{contactFormError && <p className="form-error" role="alert">{contactFormError}</p>}<div className="modal-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={() => setContactEditorOpen(false)}>Annuler</button><button className="button button-primary" disabled={busy}>{busy ? "Enregistrement…" : "Enregistrer"}</button></div></form></Modal>}
+    {numberPurchaseOpen && selectedOrg && <NumberPurchase key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} email={session.user.email ?? "votre compte"} api={api} onClose={() => setNumberPurchaseOpen(false)} onPurchased={async (lineId) => { await refreshWorkspace(selectedOrg); setSelectedLineId(lineId); setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); setActiveTab("conversations"); setNumberPurchaseOpen(false); setNotice("Votre nouvelle ligne est prête."); setDialerOpen(true); }} />}
+  </div>;
 }
