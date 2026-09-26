@@ -6,8 +6,9 @@ import { transcriptionResponseSchema, type CallTranscript, type Database } from 
 import type { AppConfig } from "./config.js";
 import type { CenterProvider } from "./call-center-provider.js";
 import { ScribeBridge, type ScribeSocketFactory, type TranscriptSnapshot } from "./scribe-bridge.js";
+import { publicRecording, registerCallRecording, type RecordingFields } from "./call-recording.js";
 
-type TranscriptRow = {
+type TranscriptRow = RecordingFields & {
   id: string; call_id: string; provider_call_sid: string; stream_sid: string | null; stream_connected: boolean;
   status: CallTranscript["status"]; started_at: string; updated_at: string;
   snapshot: TranscriptSnapshot; error: string | null;
@@ -20,7 +21,7 @@ function checked<T>(result: { data: T; error: unknown }): T {
   return result.data;
 }
 function publicTranscript(row: TranscriptRow | null): CallTranscript | null {
-  return row ? { id: row.id, status: row.status, startedAt: row.started_at, updatedAt: row.updated_at, segments: row.snapshot.segments, partials: row.snapshot.partials, error: row.error } : null;
+  return row ? { id: row.id, status: row.status, startedAt: row.started_at, updatedAt: row.updated_at, segments: row.snapshot.segments, partials: row.snapshot.partials, error: row.error, recording: publicRecording(row) } : null;
 }
 
 export function registerTranscription(app: FastifyInstance, config: AppConfig, service: SupabaseClient<Database> | null, provider: CenterProvider | null,
@@ -28,6 +29,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
   // Isolate the new schema until generated database types are refreshed on deployment.
   const db = service as SupabaseClient | null;
   const available = Boolean(config.TRANSCRIPTION_ENABLED && config.ELEVENLABS_API_KEY && db && provider);
+  const recordingEnabled = available && config.CALL_RECORDING_ENABLED;
   const liveSessions = new Map<string, () => Promise<void>>();
 
   async function authorizedCall(request: FastifyRequest, providerSid: boolean) {
@@ -49,6 +51,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
     return call!;
   }
   const running = (call: { status: string; ended_at: string | null }) => !call.ended_at && ["initiated", "ringing", "in-progress", "answered"].includes(call.status);
+  const recordings = registerCallRecording(app, config, db, provider, validateWebhook, (request) => authorizedCall(request, false));
   async function readRow(callId: string): Promise<TranscriptRow | null> {
     if (!db) return null;
     const result = await db.from("call_transcriptions").select("*").eq("call_id", callId).maybeSingle();
@@ -58,7 +61,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
       const stale = checked(await db.from("call_transcriptions").update({ status: "error", error: "La transcription a été interrompue. Les phrases reçues sont conservées.", updated_at: new Date().toISOString() }).eq("id", row.id).eq("updated_at", row.updated_at).select("*").maybeSingle()) as TranscriptRow | null;
       if (stale) row = stale;
     }
-    return row;
+    return row ? recordings.refresh(row) : row;
   }
   for (const bySid of [true, false]) {
     app.get(bySid ? "/v1/voice/calls/:id/transcription" : "/v1/calls/:id/transcription", async (request, reply) => {
@@ -66,7 +69,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
       const call = await authorizedCall(request, bySid);
       // Disabled installations need not have the migration yet.
       const row = await readRow(call.id);
-      return transcriptionResponseSchema.parse({ available, callId: call.id, callActive: running(call), transcript: publicTranscript(row) });
+      return transcriptionResponseSchema.parse({ available, recordingEnabled, callId: call.id, callActive: running(call), transcript: publicTranscript(row) });
     });
   }
   app.post("/v1/voice/calls/:id/transcription", async (request, reply) => {
@@ -77,10 +80,17 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
     if (call.ended_at || !["in-progress", "answered"].includes(call.status)) problem("La transcription démarre pendant un appel connecté.", 409);
     const providerSid = (request.params as { id: string }).id;
     // Unique call_id is the distributed start lock, including retries after a lost HTTP response.
-    const inserted = await db!.from("call_transcriptions").insert({ call_id: call.id, provider_call_sid: providerSid, started_by: request.context!.userId }).select("*").single();
+    const inserted = await db!.from("call_transcriptions").insert({ call_id: call.id, provider_call_sid: providerSid, started_by: request.context!.userId,
+      ...(recordingEnabled ? { recording_status: "starting", recording_started_at: new Date().toISOString(), recording_updated_at: new Date().toISOString() } : {}),
+    }).select("*").single();
     if (inserted.error && inserted.error.code !== "23505") problem("Impossible de préparer la transcription.");
     let row = inserted.data as TranscriptRow | null;
     if (row) {
+      await recordings.start(row);
+      // Stop can arrive while recording creation is in flight. Do not open a new
+      // media stream for a session that the user has already stopped.
+      const current = await readRow(call.id);
+      if (current?.status !== "starting") return transcriptionResponseSchema.parse({ available, recordingEnabled, callId: call.id, callActive: running(call), transcript: publicTranscript(current) });
       try {
         const stream = await provider!.calls(providerSid).streams.create({
           url: `${config.API_PUBLIC_URL.replace(/\/$/, "").replace(/^https:/, "wss:")}/webhooks/twilio/transcription/${row.id}`,
@@ -94,13 +104,14 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
       }
     }
     row = await readRow(call.id);
-    return transcriptionResponseSchema.parse({ available, callId: call.id, callActive: running(call), transcript: publicTranscript(row) });
+    return transcriptionResponseSchema.parse({ available, recordingEnabled, callId: call.id, callActive: running(call), transcript: publicTranscript(row) });
   });
   app.post("/v1/calls/:id/transcription/stop", async (request, reply) => {
     reply.header("cache-control", "no-store");
     const call = await authorizedCall(request, false);
     if (!db || !provider) problem("La transcription est indisponible.");
     const row = await readRow(call.id);
+    if (row) await recordings.stop(row);
     if (row && ["starting", "live", "stopping"].includes(row.status)) {
       checked(await db!.from("call_transcriptions").update({ status: "stopping" }).eq("id", row.id).in("status", ["starting", "live"]));
       try { await provider!.calls(row.provider_call_sid).streams(`scribe-${row.id}`).update({ status: "stopped" }); }
@@ -109,7 +120,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
       checked(await db!.from("call_transcriptions").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", row.id).eq("status", "stopping").eq("stream_connected", false));
       await liveSessions.get(row.id)?.();
     }
-    return transcriptionResponseSchema.parse({ available, callId: call.id, callActive: running(call), transcript: publicTranscript(await readRow(call.id)) });
+    return transcriptionResponseSchema.parse({ available, recordingEnabled, callId: call.id, callActive: running(call), transcript: publicTranscript(await readRow(call.id)) });
   });
 
   app.post("/webhooks/twilio/transcription/:id/status", async (request, reply) => {

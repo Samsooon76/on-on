@@ -21,3 +21,21 @@ test('revoked access clears visible text and does not retry', async () => {
   });
   assert.equal(result.lost, true); assert.equal(calls, 1);
 });
+
+test('polling continues after text finishes until recorded audio becomes ready', async () => {
+  let calls = 0;
+  await new Promise((resolve, reject) => {
+    watchTranscript(async () => ({ available: true, callId: transcript.id, callActive: false, transcript: { ...transcript, status: 'completed', recording: { status: ++calls === 1 ? 'processing' : 'ready', startedAt: null, durationSeconds: 12, error: null } } }), { callId: transcript.id }, { onData: result => { if (result.transcript.recording.status === 'ready') resolve(); }, onError: reject }, 1);
+  });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(calls, 2);
+});
+
+test('ready audio stopped during the call is unblocked when the call ends', async () => {
+  let calls = 0;
+  await new Promise((resolve, reject) => {
+    watchTranscript(async () => ({ available: true, callId: transcript.id, callActive: ++calls === 1, transcript: { ...transcript, status: 'completed', recording: { status: 'ready', startedAt: null, durationSeconds: 12, error: null } } }), { callId: transcript.id }, { onData: result => { if (!result.callActive) resolve(); }, onError: reject }, 1);
+  });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(calls, 2);
+});

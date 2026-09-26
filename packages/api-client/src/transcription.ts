@@ -1,5 +1,5 @@
 import { transcriptionResponseSchema, type CallTranscript, type TranscriptSegment, type TranscriptionResponse } from "@onoff/contracts";
-export type { CallTranscript, TranscriptSegment, TranscriptionResponse } from "@onoff/contracts";
+export type { CallRecording, CallTranscript, TranscriptSegment, TranscriptionResponse } from "@onoff/contracts";
 
 export type TranscriptApi = <T>(path: string, init?: RequestInit) => Promise<T>;
 export type TranscriptTarget = { providerCallSid: string; callId?: never } | { callId: string; providerCallSid?: never };
@@ -31,7 +31,9 @@ export function watchTranscript(api: TranscriptApi, target: TranscriptTarget, li
       if (controller.signal.aborted) return;
       failures = 0;
       listeners.onData(result);
-      if (result.transcript && ["completed", "error"].includes(result.transcript.status)) return;
+      const audioPending = result.transcript?.recording && ["starting", "recording", "processing"].includes(result.transcript.recording.status);
+      const audioWaitingForHangup = result.callActive && result.transcript?.recording?.status === "ready";
+      if (result.transcript && ["completed", "error"].includes(result.transcript.status) && !audioPending && !audioWaitingForHangup) return;
       if (!result.callActive && !result.transcript || !result.available && !result.transcript) return;
     } catch (error) {
       if (controller.signal.aborted) return;

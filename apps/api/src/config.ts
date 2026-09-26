@@ -25,6 +25,7 @@ const envSchema = z.object({
   MCP_ENABLED: bool.default(false),
   VOICE_ENABLED: bool.default(false),
   TRANSCRIPTION_ENABLED: bool.default(false),
+  CALL_RECORDING_ENABLED: bool.default(false),
   ELEVENLABS_API_KEY: z.string().min(1).optional(),
   ELEVENLABS_LANGUAGE_CODE: z.string().regex(/^[a-z]{2,3}$/).optional(),
   SMS_ENABLED: bool.default(false),
@@ -42,6 +43,9 @@ const envSchema = z.object({
   MAX_ACTIVE_CALL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
   MAX_RINGING_DEVICES: z.coerce.number().int().min(1).max(8).default(4),
 }).superRefine((value, ctx) => {
+  if (value.CALL_RECORDING_ENABLED && !value.TRANSCRIPTION_ENABLED) {
+    ctx.addIssue({ code: "custom", path: ["CALL_RECORDING_ENABLED"], message: "L’enregistrement des appels exige la transcription activée." });
+  }
   if (value.WEBHOOK_ENCRYPTION_KEY && !value.SUPABASE_SECRET_KEY) {
     ctx.addIssue({ code: "custom", path: ["WEBHOOK_ENCRYPTION_KEY"], message: "Les webhooks exigent une clé Supabase serveur." });
   }

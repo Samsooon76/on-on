@@ -8,6 +8,7 @@ insert into public.lines(id,organization_id,phone_number,voice_enabled) values (
 insert into public.line_assignments(organization_id,line_id,user_id,can_voice) values ('10000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001',true);
 insert into public.calls(id,organization_id,line_id,remote_number,direction,status) values ('30000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','+33601020304','outbound','answered');
 insert into public.call_transcriptions(call_id,provider_call_sid) values ('30000000-0000-4000-8000-000000000001','CA11111111111111111111111111111111');
+update public.call_transcriptions set recording_sid='RE11111111111111111111111111111111', recording_status='ready', recording_duration_seconds=12;
 do $$ begin
   assert not has_table_privilege('anon','public.call_transcriptions','select'), 'No anonymous transcript access';
   assert not has_table_privilege('authenticated','public.call_transcriptions','insert'), 'Only server writes text';
@@ -19,7 +20,10 @@ do $$ begin
 end $$;
 set local role authenticated;
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',true);
-do $$ begin assert (select count(*) from public.call_transcriptions) = 1, 'Assigned user reads transcript'; end $$;
+do $$ begin
+  assert (select count(*) from public.call_transcriptions) = 1, 'Assigned user reads transcript';
+  assert (select recording_duration_seconds from public.call_transcriptions limit 1) = 12, 'Recording metadata follows call access';
+end $$;
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000002',true);
 do $$ begin assert (select count(*) from public.call_transcriptions) = 0, 'Other user cannot read'; end $$;
 reset role;

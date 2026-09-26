@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+export const callRecordingSchema = z.object({
+  status: z.enum(["starting", "recording", "processing", "ready", "unavailable", "failed"]),
+  durationSeconds: z.number().int().nonnegative().nullable(),
+  startedAt: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export type CallRecording = z.infer<typeof callRecordingSchema>;
+
 export const transcriptSegmentSchema = z.object({
   id: z.string(),
   speaker: z.enum(["local", "remote"]),
@@ -14,9 +22,11 @@ export const callTranscriptSchema = z.object({
   segments: z.array(transcriptSegmentSchema),
   partials: z.object({ local: transcriptSegmentSchema.nullable(), remote: transcriptSegmentSchema.nullable() }),
   error: z.string().nullable(),
+  recording: callRecordingSchema.nullish(),
 });
 export const transcriptionResponseSchema = z.object({
   available: z.boolean(),
+  recordingEnabled: z.boolean().optional(),
   callId: z.string().uuid(),
   callActive: z.boolean(),
   transcript: callTranscriptSchema.nullable(),

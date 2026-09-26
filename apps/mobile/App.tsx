@@ -136,6 +136,7 @@ function MobileApp() {
   const registeredUserRef = useRef("");
 
   const authToken = session?.access_token;
+  const getCallAudioSource = useCallback((callId: string) => ({ uri: `${apiBase}/v1/calls/${encodeURIComponent(callId)}/recording/audio`, headers: { authorization: `Bearer ${authToken}` } }), [authToken]);
   const apiClient = useMemo(() => createApiClient({ baseUrl: apiBase, getAccessToken: () => authToken }), [authToken]);
   const activeAssignment = useMemo(
     () => lines.find((item) => item.lines?.id === selectedLineId) ?? lines.find((item) => item.lines) ?? null,
@@ -1097,7 +1098,7 @@ function MobileApp() {
       {!!providerCallSid && callStatus === "active" && <Touch accessibilityLabel="Voir la transcription en direct" style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 44, paddingTop: 8 }} onPress={() => setTranscriptTarget({ providerCallSid })}><Icon name="document-text-outline" size={18} color={palette.accent} /><Text style={{ color: palette.accent, fontSize: 13, flex: 1 }}>Transcription en direct</Text><Icon name="chevron-forward" size={16} color={palette.accent} /></Touch>}
       {keypadVisible && !incomingNumber && <View style={styles.keypad}>{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => <Touch key={digit} accessibilityLabel={`Tonalité ${digit}`} style={styles.keypadKey} onPress={() => { feedback(); voiceRef.current?.sendDigits(digit); }}><Text style={styles.keypadDigit}>{digit}</Text></Touch>)}</View>}
     </View>}
-    {transcriptTarget && <CallTranscript key={`${session.user.id}:${selectedOrg}:${transcriptTarget.callId ?? transcriptTarget.providerCallSid}`} api={api} target={transcriptTarget} onClose={() => setTranscriptTarget(null)} onHangup={callStatus === "active" || callStatus === "reconnecting" ? () => voiceRef.current?.hangUp() : undefined} />}
+    {transcriptTarget && <CallTranscript key={`${session.user.id}:${selectedOrg}:${transcriptTarget.callId ?? transcriptTarget.providerCallSid}`} api={api} getAudioSource={getCallAudioSource} playbackBlocked={callStatus !== "idle"} target={transcriptTarget} onClose={() => setTranscriptTarget(null)} onHangup={callStatus === "active" || callStatus === "reconnecting" ? () => voiceRef.current?.hangUp() : undefined} />}
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={insets.top + (isThread ? 90 : 100)}>
       {activeTab === "calls" && <FlatList
         data={visibleCalls} keyExtractor={(item) => item.id} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}

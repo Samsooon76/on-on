@@ -21,6 +21,7 @@
     "@supabase/supabase-js": "2.117.1",
     "@twilio/voice-react-native-sdk": "1.8.0",
     "expo": "57.0.25",
+    "expo-audio": "57.0.5",
     "expo-build-properties": "57.0.20",
     "expo-dev-client": "57.0.19",
     "expo-haptics": "~57.0.3",
