@@ -20,7 +20,7 @@ Les renvois respectent `TWILIO_ALLOWED_DESTINATIONS`. Les numéros déjà géré
 
 ## Déploiement
 
-1. Appliquer `supabase/migrations/20260926120000_live_call_center.sql` avant la nouvelle API. L’ancien IVR et les appels directs restent compatibles tant qu’aucun parcours avancé n’est publié.
+1. Appliquer `supabase/migrations/20260926095957_live_call_center.sql` avant la nouvelle API. L’ancien IVR et les appels directs restent compatibles tant qu’aucun parcours avancé n’est publié.
 2. Déployer les builds API et Web du même changement. Aucun nouveau secret n’est nécessaire : les credentials Twilio et Supabase serveur existants sont utilisés. L’API doit avoir `VOICE_ENABLED=true`, un `API_PUBLIC_URL` HTTPS accessible par Twilio, et une clé Twilio autorisée à gérer TaskRouter, les numéros, les appels et les enregistrements.
 3. Un numéro Twilio vocal actif doit être attaché à une ligne de l’organisation. La publication contrôle que le compte et le webhook correspondent. Le bouton de publication ne modifie pas les réglages SMS.
 4. Activer le centre et créer les files depuis l’application. Les SID sont persistés côté serveur ; les noms déterministes permettent de retrouver les ressources après une réponse réseau perdue. Une configuration de file non synchronisée est indiquée dans l’interface et ne peut pas être publiée.
