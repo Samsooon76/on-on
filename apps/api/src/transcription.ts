@@ -24,7 +24,7 @@ function publicTranscript(row: TranscriptRow | null): CallTranscript | null {
 }
 
 export function registerTranscription(app: FastifyInstance, config: AppConfig, service: SupabaseClient<Database> | null, provider: CenterProvider | null,
-  validateWebhook: (request: FastifyRequest) => boolean, openSocket?: ScribeSocketFactory): void {
+  validateWebhook: (request: FastifyRequest, transport?: "http" | "websocket") => boolean, openSocket?: ScribeSocketFactory): void {
   // Isolate the new schema until generated database types are refreshed on deployment.
   const db = service as SupabaseClient | null;
   const available = Boolean(config.TRANSCRIPTION_ENABLED && config.ELEVENLABS_API_KEY && db && provider);
@@ -118,6 +118,8 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
     if (!db || body.AccountSid !== config.TWILIO_ACCOUNT_SID) return reply.code(403).send();
     const id = uuid.parse((request.params as { id: string }).id);
     if (body.StreamEvent === "stream-error") {
+      // Retain a useful diagnostic without logging provider text, audio or signatures.
+      request.log.warn({ transcriptionId: id, providerCode: body.StreamError?.match(/\b31\d{3}\b/)?.[0] ?? "stream_error" }, "Twilio transcription stream failed");
       checked(await db.from("call_transcriptions").update({ status: "error", error: "Le flux audio de transcription a été interrompu.", updated_at: new Date().toISOString() }).eq("id", id).eq("provider_call_sid", body.CallSid ?? "").in("status", ["starting", "live", "stopping"]));
       await liveSessions.get(id)?.();
     }
@@ -129,7 +131,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
     scope.get<{ Params: { id: string } }>("/webhooks/twilio/transcription/:id", {
       websocket: true,
       preValidation: async (request, reply) => {
-        if (!available || !uuid.safeParse(request.params.id).success || !validateWebhook(request)) return reply.code(403).send();
+        if (!available || !uuid.safeParse(request.params.id).success || !validateWebhook(request, "websocket")) return reply.code(403).send();
       },
     }, (socket, request) => {
       const id = request.params.id;

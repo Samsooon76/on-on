@@ -2,11 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
-import Fastify from 'fastify';
 import twilio from 'twilio';
 import WebSocket from 'ws';
 import { loadConfig } from '../dist/config.js';
-import { registerTranscription } from '../dist/transcription.js';
+import { createApp } from '../dist/app.js';
 
 const callId = '10000000-0000-4000-8000-000000000001', userId = '20000000-0000-4000-8000-000000000001';
 const sid = prefix => prefix + '1'.repeat(32);
@@ -20,7 +19,7 @@ class ScribeSocket extends EventEmitter {
 }
 function setup(t) {
   const state = { allowed: true, starts: [], stops: [], rows: [], sockets: [], call: { id: callId, status: 'answered', ended_at: null, started_at: new Date().toISOString(), created_at: new Date().toISOString() } };
-  function client(user = false) { return { from(table) {
+  function client(user = false) { return { auth: { getUser: async () => ({ data: { user: { id: userId, is_anonymous: false } }, error: null }) }, from(table) {
     const filters = []; let one = false, mutation, values;
     const q = { select() { return q; }, eq(k, v) { filters.push(row => row[k] === v); return q; }, is(k, v) { return q.eq(k, v); }, in(k, values) { filters.push(row => values.includes(row[k])); return q; }, maybeSingle() { one = true; return q; }, single() { one = true; return q; }, insert(v) { mutation = 'insert'; values = v; return q; }, update(v) { mutation = 'update'; values = v; return q; }, then(resolve, reject) {
       let rows = table === 'calls' ? user && !state.allowed ? [] : [state.call] : table === 'call_legs' ? user ? [] : [{ provider_call_sid: sid('CA'), call_id: callId }] : state.rows;
@@ -33,15 +32,13 @@ function setup(t) {
     } }; return q;
   } }; }
   const service = client(), userClient = client(true);
-  const app = Fastify();
-  app.decorateRequest('context', null);
-  app.addHook('preHandler', async (request, reply) => {
-    if (!request.url.startsWith('/v1/')) return;
-    if (!request.headers.authorization) return reply.code(401).send();
-    request.context = { userId, supabase: userClient };
-  });
   const provider = { calls(callSid) { const streams = name => ({ update: async value => { state.stops.push({ callSid, name, ...value }); } }); streams.create = async value => { state.starts.push({ callSid, ...value }); return { sid: sid('MZ') }; }; return { streams }; } };
-  registerTranscription(app, config, service, provider, request => twilio.validateRequest(config.TWILIO_AUTH_TOKEN, request.headers['x-twilio-signature'] ?? '', config.API_PUBLIC_URL + request.url, request.body ?? {}), () => { const socket = new ScribeSocket(); state.sockets.push(socket); return socket; });
+  // Use the production app, including its real signature validation and proxy handling.
+  const app = createApp(config, {
+    createSupabaseClient: (_url, key) => key === config.SUPABASE_SECRET_KEY ? service : userClient,
+    centerProvider: provider,
+    scribeSocketFactory: () => { const socket = new ScribeSocket(); state.sockets.push(socket); return socket; },
+  });
   t.after(() => app.close());
   const request = (method = 'GET', path = `/v1/voice/calls/${sid('CA')}/transcription`) => app.inject({ method, url: path, headers: { authorization: 'Bearer session' } });
   return { app, state, request };
@@ -88,15 +85,22 @@ test('stopping before the stream connects completes cleanly without changing the
   assert.equal(state.stops.length, 1);
   assert.equal(state.stops[0].status, 'stopped');
 });
-test('signed WebSocket relays actual media, saves final text and rejects unsigned upgrades', async t => {
+for (const suffix of ['', '/']) test(`production app accepts WSS signatures${suffix ? ' with Twilio trailing slash' : ''} and saves live text for post-call history`, async t => {
   const { app, state, request } = setup(t);
   await request('POST');
   const address = await app.listen({ host: '127.0.0.1', port: 0 });
   const path = `/webhooks/twilio/transcription/${state.rows[0].id}`;
-  const rejected = new WebSocket(address.replace('http:', 'ws:') + path);
-  const [error] = await once(rejected, 'error'); assert.match(error.message, /403/);
-  const socket = new WebSocket(address.replace('http:', 'ws:') + path, { headers: { 'x-twilio-signature': twilio.getExpectedTwilioSignature(config.TWILIO_AUTH_TOKEN, config.API_PUBLIC_URL + path, {}) } });
-  await once(socket, 'open');
+  for (const signature of [null, 'invalid', twilio.getExpectedTwilioSignature(config.TWILIO_AUTH_TOKEN, config.API_PUBLIC_URL + path, {}), twilio.getExpectedTwilioSignature(config.TWILIO_AUTH_TOKEN, 'wss://attacker.example' + path, {})]) {
+    const rejected = new WebSocket(address.replace('http:', 'ws:') + path, { headers: { ...(signature ? { 'x-twilio-signature': signature } : {}), 'x-forwarded-host': 'attacker.example', 'x-forwarded-proto': 'wss' } });
+    try {
+      const [error] = await once(rejected, 'error', { signal: AbortSignal.timeout(2000) }); assert.match(error.message, /403/);
+    } finally { rejected.terminate(); }
+  }
+  assert.equal(state.sockets.length, 0);
+  const socket = new WebSocket(address.replace('http:', 'ws:') + path, { headers: { 'x-twilio-signature': twilio.getExpectedTwilioSignature(config.TWILIO_AUTH_TOKEN, state.starts[0].url + suffix, {}), 'x-forwarded-proto': 'https' } });
+  t.after(() => socket.terminate());
+  await once(socket, 'open', { signal: AbortSignal.timeout(2000) });
+  socket.send(JSON.stringify({ event: 'connected', protocol: 'Call', version: '1.0.0' }));
   socket.send(JSON.stringify({ event: 'start', start: { accountSid: sid('AC'), callSid: sid('CA'), streamSid: sid('MZ'), mediaFormat: { encoding: 'audio/x-mulaw', sampleRate: 8000, channels: 1 } } }));
   // Media arrives before the asynchronous database claim resolves.
   socket.send(JSON.stringify({ event: 'media', streamSid: sid('MZ'), media: { track: 'inbound', timestamp: '10', chunk: '1', payload: '////' } }));
@@ -113,5 +117,24 @@ test('signed WebSocket relays actual media, saves final text and rejects unsigne
   assert.equal(result.transcript.segments[0].text, 'Bonjour à tous.');
   assert.equal(result.transcript.partials.local, null);
   assert.equal(result.transcript.status, 'completed');
+  state.call.ended_at = new Date().toISOString();
+  state.call.status = 'completed';
+  const history = (await request('GET', `/v1/calls/${callId}/transcription`)).json();
+  assert.equal(history.callActive, false);
+  assert.equal(history.transcript.segments[0].text, 'Bonjour à tous.');
   socket.terminate();
+});
+
+test('HTTPS stream callbacks still verify their form body and preserve the failure in history', async t => {
+  const { app, state, request } = setup(t);
+  await request('POST');
+  const path = `/webhooks/twilio/transcription/${state.rows[0].id}/status`;
+  const body = { AccountSid: sid('AC'), CallSid: sid('CA'), StreamSid: sid('MZ'), StreamEvent: 'stream-error', StreamError: '31920: WebSocket handshake error' };
+  const headers = { 'content-type': 'application/x-www-form-urlencoded', 'x-twilio-signature': twilio.getExpectedTwilioSignature(config.TWILIO_AUTH_TOKEN, config.API_PUBLIC_URL + path, body) };
+  const tampered = await app.inject({ method: 'POST', url: path, headers, payload: new URLSearchParams({ ...body, StreamError: 'tampered' }).toString() });
+  assert.equal(tampered.statusCode, 403);
+  assert.equal(state.rows[0].status, 'starting');
+  const accepted = await app.inject({ method: 'POST', url: path, headers, payload: new URLSearchParams(body).toString() });
+  assert.equal(accepted.statusCode, 204);
+  assert.equal((await request()).json().transcript.status, 'error');
 });

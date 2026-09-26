@@ -148,15 +148,25 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       })
     : null;
 
-  function validateTwilioWebhook(request: { headers: Record<string, string | string[] | undefined>; url: string; body: unknown; log?: FastifyInstance["log"]; id?: string }): boolean {
+  function validateTwilioWebhook(request: { headers: Record<string, string | string[] | undefined>; url: string; body: unknown; log?: FastifyInstance["log"]; id?: string }, transport: "http" | "websocket" = "http"): boolean {
     const signature = request.headers["x-twilio-signature"];
     if (typeof signature !== "string" || !config.TWILIO_AUTH_TOKEN) {
       request.log?.warn({ requestId: request.id, webhook: request.url.split("?")[0], reason: typeof signature === "string" ? "validation_unavailable" : "signature_missing" }, "Twilio webhook signature rejected");
       return false;
     }
-    const url = new URL(request.url, config.API_PUBLIC_URL).toString();
-    const params = request.body && typeof request.body === "object" ? request.body as Record<string, string> : {};
-    const valid = twilio.validateRequest(config.TWILIO_AUTH_TOKEN, signature, url, params);
+    // Signatures use the public URL configured with Twilio, never proxy headers.
+    // Media Streams signs the WSS URL, even though the upgrade reaches us over HTTP.
+    const url = new URL(request.url, config.API_PUBLIC_URL);
+    if (transport === "websocket") url.protocol = "wss:";
+    const urls = [url.toString()];
+    if (transport === "websocket" && !url.pathname.endsWith("/")) {
+      // Twilio documents this canonicalization for voice WSS handshakes:
+      // https://www.twilio.com/docs/usage/security#validating-requests-are-coming-from-twilio
+      url.pathname += "/";
+      urls.push(url.toString());
+    }
+    const params = transport === "http" && request.body && typeof request.body === "object" ? request.body as Record<string, string> : {};
+    const valid = urls.some((candidate) => twilio.validateRequest(config.TWILIO_AUTH_TOKEN!, signature, candidate, params));
     if (!valid) request.log?.warn({ requestId: request.id, webhook: request.url.split("?")[0], reason: "signature_invalid" }, "Twilio webhook signature rejected");
     return valid;
   }

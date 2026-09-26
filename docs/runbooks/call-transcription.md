@@ -21,7 +21,7 @@ Dans un appel connecté : ouvrir **Transcription** puis **Démarrer la transcrip
 
 1. Le SDK Twilio web/natif fournit son `CallSid` dès la connexion. L’API retrouve la jambe correspondante côté serveur et vérifie l’accès à l’appel via le client Supabase de l’utilisateur et les règles RLS existantes.
 2. Un enregistrement unique par appel sert de verrou partagé entre les réplicas. L’API lance un Media Stream **unidirectionnel**, `both_tracks`, sur la jambe du SDK. Elle ne remplace pas le TwiML de l’appel.
-3. Le handshake WebSocket vérifie la signature Twilio avec l’URL publique HTTPS. Le message `start` doit correspondre au compte, à la jambe, au stream et à la session attendus. Un verrou atomique empêche l’ouverture de deux sessions payantes pour un même stream.
+3. Le handshake WebSocket vérifie la signature Twilio avec l’URL publique **WSS** fournie à Media Streams, même si Railway termine TLS et transmet un upgrade HTTP à l’API. La variante avec slash final documentée par Twilio est aussi vérifiée. Le domaine vient de la configuration serveur, jamais des en-têtes proxy. Les callbacks de statut conservent leur validation HTTPS et leur corps de formulaire signé. Le message `start` doit correspondre au compte, à la jambe, au stream et à la session attendus. Un verrou atomique empêche l’ouverture de deux sessions payantes pour un même stream.
 4. Deux connexions serveur Scribe utilisent `scribe_v2_realtime`, `audio_format=ulaw_8000`, `commit_strategy=vad`. Sur la jambe SDK, la piste `inbound` porte la voix de l’utilisateur et `outbound` celle de son interlocuteur. Cette séparation fournit les libellés sans dépendre d’une diarisation du modèle. Elle représente les deux pistes de l’appel, pas chaque intervenant d’une conférence ou d’un transfert.
 5. Les `partial_transcript` remplacent la phrase provisoire. Les `committed_transcript` l’ajoutent une fois au texte conservé. Les événements additionnels de timestamps ne sont pas réinsérés. Les temps affichés sont des repères approximatifs depuis le début d’appel, pas des alignements de mots.
 6. Les snapshots texte sont coalescés toutes les 400 ms et sauvegardés dans Supabase. Les écrans les lisent par HTTP authentifié toutes les 800 ms, sans requêtes concurrentes, avec annulation à la fermeture et temporisation en cas d’erreur. Ce transport fonctionne entre réplicas et avec le `fetch` natif iOS. Il ajoute jusqu’à environ 1,2 s à la latence du moteur, hors réseau. En arrière-plan iOS, l’affichage suspend les requêtes puis se resynchronise au retour ; la transcription serveur continue.
@@ -46,7 +46,9 @@ Les réponses publiques n’exposent ni clé, ni identifiant de stream, ni corps
 
 ## Vérification
 
-Les tests unitaires couvrent le format audio, les deux pistes, le buffering borné, les commits finaux et les erreurs fournisseur. Un test d’intégration ouvre un vrai WebSocket local avec des sockets Scribe simulés et vérifie la signature, la sauvegarde et l’arrêt. Les tests PostgreSQL couvrent RLS, révocation, absence d’écriture cliente et unicité du démarrage.
+Les tests unitaires couvrent le format audio, les deux pistes, le buffering borné, les commits finaux et les erreurs fournisseur. Les tests d’intégration ouvrent un vrai WebSocket local via l’application complète avec des sockets Scribe simulés : signatures WSS avec/sans slash final, refus des signatures HTTPS/absentes/invalides et d’un domaine falsifié, callbacks HTTPS signés, sauvegarde live puis lecture après l’appel. Les tests PostgreSQL couvrent RLS, révocation, absence d’écriture cliente et unicité du démarrage.
+
+Diagnostic : un `403` sur `GET /webhooks/twilio/transcription/:id` accompagné de `Twilio webhook signature rejected` bloque le flux avant ElevenLabs. Vérifier l’URL publique WSS et le token Twilio, sans désactiver la validation. Les callbacks `stream-error` journalisent uniquement un code fournisseur assaini. Si `stream_connected=false` et aucun segment n’a été reçu, l’historique conserve l’échec : aucun audio n’est stocké pour reconstruire cet appel après coup.
 
 ```sh
 pnpm test
@@ -59,10 +61,13 @@ Pour la recette externe après configuration : passer un appel sortant puis entr
 
 Le 26 septembre 2026, la clé serveur a été validée auprès de l’endpoint ElevenLabs de jeton Scribe Realtime (HTTP 200, sans envoi d’audio). La migration de transcription a été appliquée en production et ses permissions vérifiées. Les deux migrations antérieures `mcp_user_integrations` et `customer_webhooks` restent hors de cette activation : ne pas lancer un `db push --include-all` sans vérifier leur périmètre. Un appel réel reste nécessaire pour valider la chaîne complète Twilio → Scribe → web/iOS.
 
+Après le diagnostic du refus de signature, le relais de production a aussi été exécuté localement contre ElevenLabs avec une phrase synthétique convertie en μ-law 8 kHz, envoyée en chunks de 20 ms. Les deux pistes ont restitué la phrase complète et finalisé leurs segments. Aucun audio utilisateur n’a été utilisé pour ce contrôle.
+
 ## Documentation consultée
 
 - [ElevenLabs : protocole Scribe Realtime](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime)
 - [ElevenLabs : événements Realtime](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/event-reference)
 - [Twilio : Streams REST](https://www.twilio.com/docs/voice/api/stream-resource)
 - [Twilio : messages Media Streams](https://www.twilio.com/docs/voice/media-streams/websocket-messages)
+- [Twilio : signatures et particularités des handshakes WSS](https://www.twilio.com/docs/usage/security)
 - [Supabase : Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
