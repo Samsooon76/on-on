@@ -132,3 +132,4 @@ export * from "./services.js";
 export * from "./mcp.js";
 export * from "./webhooks.js";
 export * from "./transcription.js";
+export * from "./tags.js";

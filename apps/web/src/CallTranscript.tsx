@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowDown, Check, Copy, DownloadSimple, Pause, TextAlignLeft, Waveform } from "@phosphor-icons/react";
 import { transcriptPath, transcriptRows, transcriptStatus, transcriptText, transcriptTime, watchTranscript, type TranscriptApi, type TranscriptTarget, type TranscriptionResponse } from "@onoff/api-client";
 import "./call-transcript.css";
+import { SubjectTags } from "./Tags";
 import { CallRecordingPlayer, type LoadCallAudio } from "./CallRecordingPlayer";
 
 export function CallTranscript({ api, target, loadAudio, playbackBlocked = false, remoteName = "Interlocuteur" }: { api: TranscriptApi; target: TranscriptTarget; loadAudio: LoadCallAudio; playbackBlocked?: boolean; remoteName?: string }) {
@@ -41,6 +42,7 @@ export function CallTranscript({ api, target, loadAudio, playbackBlocked = false
   }
   return <section className="transcript-panel" aria-label="Transcription de l’appel">
     <header className="transcript-heading"><span className="transcript-mark"><TextAlignLeft size={21} /></span><div><h3>Le fil de votre appel</h3><p>Chaque mot, à portée de regard.</p></div><span className={`transcript-badge${live ? " is-live" : ""}`} role="status">{live && <i />}{transcript ? transcriptStatus[transcript.status] : "Transcription"}</span></header>
+    {data && <SubjectTags key={data.callId} api={api} kind="call" id={data.callId} />}
     {data && <CallRecordingPlayer key={data.callId} callId={data.callId} recording={transcript?.recording} loadAudio={loadAudio} blocked={playbackBlocked || data.callActive} />}
     {error && <div className="transcript-error" role="alert">{error}<button className="text-button" onClick={() => setRevision((value) => value + 1)}>Actualiser</button></div>}
     {transcript?.error && <p className="transcript-error" role="status">{transcript.error}</p>}

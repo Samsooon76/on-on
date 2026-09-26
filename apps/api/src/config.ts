@@ -26,6 +26,8 @@ const envSchema = z.object({
   VOICE_ENABLED: bool.default(false),
   TRANSCRIPTION_ENABLED: bool.default(false),
   CALL_RECORDING_ENABLED: bool.default(false),
+  TYPESAFE_API_KEY: z.string().min(1).optional(),
+  TYPESAFE_MODEL: z.string().regex(/^jev-[a-zA-Z0-9.-]+$/).default("jev-1.13.0"),
   ELEVENLABS_API_KEY: z.string().min(1).optional(),
   ELEVENLABS_LANGUAGE_CODE: z.string().regex(/^[a-z]{2,3}$/).optional(),
   SMS_ENABLED: bool.default(false),

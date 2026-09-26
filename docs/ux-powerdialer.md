@@ -80,7 +80,7 @@ Recherche du 26 septembre 2026, sur les documentations officielles. Il s’agit 
 
 CloudTalk indique que son ancien Power Dialer n’est plus enrichi et oriente vers son AI Sales Dialer. La comparaison retient ici le parcours séquentiel d’un commercial disponible, cohérent avec le transport actuel d’Onoff.
 
-Les campagnes partagées côté serveur, la synchronisation CRM, les exclusions globales, les notifications de rappel et la détection automatique de répondeur constituent des intégrations supplémentaires. JEV reste hors périmètre : aucune analyse, qualification ou statistique commerciale fictive n’est produite.
+Les campagnes partagées côté serveur, la synchronisation CRM, les exclusions globales, les notifications de rappel et la détection automatique de répondeur constituent des intégrations supplémentaires. La catégorisation Jev des appels transcrits est disponible via les [call tags](runbooks/call-tags.md). Elle ne modifie pas les dispositions de campagne ni les statistiques commerciales du powerdialer.
 
 ## Vérification
 

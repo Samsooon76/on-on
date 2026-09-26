@@ -6,6 +6,7 @@ import * as SecureStore from "expo-secure-store";
 import * as Linking from "expo-linking";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
+import { TagManager } from "./src/Tags";
 import { CallTranscript } from "./src/CallTranscript";
 import type { TranscriptTarget } from "@onoff/api-client";
 import { Dialer } from "./src/Dialer";
@@ -1108,7 +1109,7 @@ function MobileApp() {
         renderItem={({ item }) => <Touch accessibilityLabel={`${item.remoteContactName ?? item.remote_number}, ${isMissedCall(item) ? "appel manqué" : item.direction === "outbound" ? "appel sortant" : "appel entrant"}. Ouvrir la conversation`} style={styles.listRow} onPress={() => newMessage(item.remote_number)}>
           <View style={[styles.roundIcon, isMissedCall(item) && styles.missedIcon]}><Icon name={isMissedCall(item) ? "call-outline" : item.direction === "outbound" ? "arrow-up-outline" : "arrow-down-outline"} color={isMissedCall(item) ? palette.red : palette.accent} size={21} /></View>
           <View style={styles.rowCopy}><Text numberOfLines={1} style={[styles.rowTitle, isMissedCall(item) && styles.missedText]}>{item.remoteContactName ?? item.remote_number}</Text><Text numberOfLines={1} style={styles.rowMeta}>{item.direction === "outbound" ? "Sortant" : "Entrant"} · {callStatusLabel(item.status)}{item.duration_seconds ? ` · ${Math.floor(item.duration_seconds / 60)}:${String(item.duration_seconds % 60).padStart(2, "0")}` : ""}</Text></View>
-          <View style={styles.rowTrailing}><IconButton icon="document-text-outline" label="Voir la transcription de cet appel" onPress={() => setTranscriptTarget({ callId: item.id })} /><Text style={styles.rowDate}>{relativeCallDate(item.created_at)}</Text><Icon name="chevron-forward" size={17} color={palette.muted} /></View>
+          <View style={styles.rowTrailing}><IconButton icon="document-text-outline" label="Tags et transcription de cet appel" onPress={() => setTranscriptTarget({ callId: item.id })} /><Text style={styles.rowDate}>{relativeCallDate(item.created_at)}</Text><Icon name="chevron-forward" size={17} color={palette.muted} /></View>
         </Touch>}
       />}
       {activeTab === "contacts" && <FlatList
@@ -1147,6 +1148,7 @@ function MobileApp() {
           <View style={styles.permissionRow}><Icon name="chatbubbles-outline" color={palette.muted} /><View style={styles.rowCopy}><Text style={styles.rowTitle}>Messages</Text><Text style={styles.rowMeta}>{activeLine?.sms_enabled && activeAssignment?.can_sms ? "SMS activés" : "Non activés"}</Text></View></View>
           {canReceiveNativeCalls && <Text style={styles.hint}>Les appels entrants sonnent aussi lorsque l’application est en arrière-plan.</Text>}
         </Card></View>
+        {selectedOrg && <TagManager key={`${session.user.id}:${selectedOrg}`} api={api} organizationId={selectedOrg} />}
         <View><Text style={styles.settingsLabel}>APPAREILS CONNECTÉS</Text><Card>{devices.length ? devices.map((device) => <View style={styles.listRow} key={device.id}><View style={styles.roundIcon}><Icon name={device.platform === "ios" || device.platform === "android" ? "phone-portrait-outline" : "laptop-outline"} color={palette.accent} /></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{device.label}</Text><Text style={styles.rowMeta}>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${relativeCallDate(device.last_active_at)}` : ""}</Text></View>{device.status === "active" && <IconButton icon="log-out-outline" label={`Révoquer ${device.label}`} onPress={() => Alert.alert("Déconnecter cet appareil ?", `${device.label} ne recevra plus les appels.`, [{ text: "Annuler", style: "cancel" }, { text: "Déconnecter", style: "destructive", onPress: () => void revokeDevice(device.id) }])} />}</View>) : <Text style={styles.hint}>Votre appareil apparaîtra ici une fois votre ligne vocale connectée.</Text>}</Card></View>
         {organizations.length > 1 && <Card><SectionTitle title="Votre organisation" />{organizations.map((organization) => <Pill key={organization.organization_id} selected={selectedOrg === organization.organization_id} disabled={callStatus !== "idle" || smsLocked} label={organization.organizations?.name ?? "Organisation"} onPress={() => selectOrganization(organization.organization_id)} />)}</Card>}
         <ActionButton label="Se déconnecter" icon="log-out-outline" quiet onPress={() => void signOut()} disabled={busy || Boolean(pendingSmsAttempt)} />

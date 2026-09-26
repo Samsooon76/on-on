@@ -22,6 +22,8 @@ Les appels et SMS sont désactivés tant que les valeurs Twilio vérifiées de l
 
 ## Documentation
 
+- [AI call tag — configuration et intégration Jev](docs/runbooks/call-tags.md)
+
 - [Transcription d’appel live web et iOS — ElevenLabs Scribe v2](docs/runbooks/call-transcription.md)
 
 - [API clients : démarrage, authentification et exemples](docs/api-clients.md) — référence publique sur `/docs`, export `/openapi.json`.

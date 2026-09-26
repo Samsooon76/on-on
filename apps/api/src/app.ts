@@ -21,6 +21,8 @@ import { registerCallCenter } from "./call-center.js";
 import { createCenterProvider, type CenterProvider } from "./call-center-provider.js";
 import { registerCustomerWebhooks } from "./customer-webhooks.js";
 import { registerApiDocumentation } from "./api-documentation.js";
+import { registerTags } from "./tags.js";
+import type { TagClassifier } from "./jev.js";
 import { registerTranscription } from "./transcription.js";
 import type { ScribeSocketFactory } from "./scribe-bridge.js";
 
@@ -37,6 +39,7 @@ export type ApiDependencies = {
   createSmsProvider?: (apiKeySid: string, apiKeySecret: string, accountSid: string) => SmsProvider;
   numberProvider?: NumberProvider;
   centerProvider?: CenterProvider;
+  tagClassifier?: TagClassifier;
   scribeSocketFactory?: ScribeSocketFactory;
 };
 
@@ -280,6 +283,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     return serviceStatus(config);
   });
   registerStatisticsRoutes(app, serviceSupabase);
+  registerTags(app, config, serviceSupabase, dependencies.tagClassifier);
   registerMcp(app, config, serviceSupabase, makeSupabaseClient, makeSmsProvider);
   const callCenter = registerCallCenter(app, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), config, validateTwilioWebhook);
   registerTranscription(app, config, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), validateTwilioWebhook, dependencies.scribeSocketFactory);

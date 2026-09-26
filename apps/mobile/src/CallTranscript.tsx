@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, FlatList, Share, StyleSheet, Text, View } from "react-native";
 import { transcriptPath, transcriptRows, transcriptStatus, transcriptText, transcriptTime, watchTranscript, type TranscriptApi, type TranscriptTarget, type TranscriptionResponse } from "@onoff/api-client";
 import { ActionButton, Icon, Sheet, Touch, palette } from "./ui";
+import { SubjectTags } from "./Tags";
 import { CallRecordingPlayer, type CallAudioSource } from "./CallRecordingPlayer";
 
 export function CallTranscript({ api, target, getAudioSource, playbackBlocked = false, remoteName = "Interlocuteur", onClose, onHangup }: {
@@ -40,6 +41,7 @@ export function CallTranscript({ api, target, getAudioSource, playbackBlocked = 
   }
   return <Sheet visible title="Le fil de votre appel" onClose={onClose}>
     <View style={s.header}><View style={s.mark}><Icon name="document-text-outline" color={palette.accent} size={21} /></View><View style={s.headerCopy}><Text style={s.title}>{remoteName}</Text><Text style={s.subtitle}>Chaque mot, à portée de regard.</Text></View><View style={[s.badge, live && s.liveBadge]}>{live && <View style={s.dot} />}<Text accessibilityLiveRegion="polite" style={[s.badgeText, live && { color: palette.accent }]}>{transcript ? transcriptStatus[transcript.status] : "Transcription"}</Text></View></View>
+    {data && <SubjectTags key={data.callId} api={api} kind="call" id={data.callId} />}
     {data && <CallRecordingPlayer key={data.callId} callId={data.callId} recording={transcript?.recording} getAudioSource={getAudioSource} blocked={playbackBlocked || data.callActive} />}
     {!!error && <View style={s.error}><Text accessibilityRole="alert" style={s.errorText}>{error}</Text><Touch onPress={() => setRevision((value) => value + 1)} style={s.retry}><Text style={s.retryText}>Actualiser</Text></Touch></View>}
     {!!transcript?.error && <Text style={[s.error, s.errorText]}>{transcript.error}</Text>}

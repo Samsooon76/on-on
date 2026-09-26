@@ -28,3 +28,5 @@ h1 { margin: 5px 0 4px; color: #233530; font-size: 17px; }
 .open-button:disabled { opacity: .48; cursor: not-allowed; }
 .notice { margin: 10px 0 0; padding: 9px 10px; border-radius: 8px; background: #fff4de; color: #78571f; font-size: 10px; line-height: 1.45; }
 footer { margin-top: 14px; color: #88928e; font-size: 9px; line-height: 1.45; }
+
+.tags-shortcut{border-top:1px solid #e7eae7;margin-top:20px;padding-top:18px}.tags-shortcut h2{font-size:14px;font-weight:500;margin:0 0 8px}.tags-shortcut p{font-size:12px;line-height:1.65;color:#657068;margin:0 0 12px}

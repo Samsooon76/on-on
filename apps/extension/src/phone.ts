@@ -38,3 +38,13 @@ export function createComposeUrl(baseUrl: string, destination: string): string |
   url.searchParams.set("callTo", normalizedDestination);
   return url.toString();
 }
+
+/** Open shared, authenticated tag settings without storing an API token in Chrome. */
+export function createTagsUrl(baseUrl: string): string | null {
+  const base = normalizeWebAppUrl(baseUrl);
+  if (!base) return null;
+  const url = new URL(base);
+  url.searchParams.set("settings", "tags");
+  url.hash = "call-tags";
+  return url.toString();
+}

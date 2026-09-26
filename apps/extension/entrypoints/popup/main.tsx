@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { createComposeUrl, extractSelectedPhone, normalizeWebAppUrl } from "../../src/phone.js";
+import { createComposeUrl, createTagsUrl, extractSelectedPhone, normalizeWebAppUrl } from "../../src/phone.js";
 import "./style.css";
 
 const WEB_APP_URL_KEY = "onoff:web-app-url";
@@ -68,6 +68,16 @@ function Popup() {
     }
   }
 
+  async function openTags() {
+    const url = createTagsUrl(webAppUrl);
+    if (!url) { setSettingsOpen(true); setNotice("Configurez l’adresse HTTPS de votre application Onoff."); return; }
+    try {
+      await chrome.storage.local.set({ [WEB_APP_URL_KEY]: normalizeWebAppUrl(webAppUrl)! });
+      await chrome.tabs.create({ url });
+      setNotice("Gestion des tags ouverte dans Onoff.");
+    } catch { setNotice("Impossible d’ouvrir les réglages des tags."); }
+  }
+
   return (
     <main className="popup-shell">
       <header className="popup-header">
@@ -92,6 +102,7 @@ function Popup() {
         {notice && <p className="notice" role="status">{notice}</p>}
         <button className="open-button" type="submit" disabled={busy || !destination.trim()}><span aria-hidden="true">↗</span> Ouvrir dans Onoff</button>
       </form>
+      <section className="tags-shortcut"><h2>AI call tag</h2><p>Classez vos appels avec Jev à partir des transcriptions et des prompts de vos tags.</p><button type="button" className="selection-button" disabled={busy} onClick={() => void openTags()}>Gérer les tags et l’IA ↗</button></section>
       <footer>La page visitée ne transmet que le texte sélectionné. L’appel reste dans l’application Onoff.</footer>
     </main>
   );
