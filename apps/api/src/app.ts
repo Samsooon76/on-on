@@ -13,6 +13,8 @@ import { createVoiceAccessToken } from "./voice.js";
 import { createNumberProvider, registerNumberRoutes, type NumberProvider } from "./number-provisioning.js";
 import { registerAdminRoutes } from "./admin.js";
 import { renderIvr } from "./ivr.js";
+import { registerCallCenter } from "./call-center.js";
+import { createCenterProvider, type CenterProvider } from "./call-center-provider.js";
 
 export type RequestContext = {
   userId: string;
@@ -34,6 +36,7 @@ export type ApiDependencies = {
   createSupabaseClient?: typeof createClient<Database>;
   createSmsProvider?: (apiKeySid: string, apiKeySecret: string, accountSid: string) => SmsProvider;
   numberProvider?: NumberProvider;
+  centerProvider?: CenterProvider;
 };
 
 type PageCursor = { createdAt: string; id: string };
@@ -201,6 +204,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
   });
 
   app.setErrorHandler((caught, request, reply) => {
+    if (caught instanceof z.ZodError) return reply.code(400).send({ code: "invalid_request", message: caught.issues[0]?.message ?? "Données invalides.", requestId: request.id });
     if (hasZodFastifySchemaValidationErrors(caught)) {
       request.log.info({ requestId: request.id, validationIssueCount: caught.validation.length }, "request schema rejected");
       return reply.code(400).send({ code: "invalid_request", message: "Les données de la requête sont invalides.", requestId: request.id });
@@ -260,6 +264,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     config.TWILIO_ACCOUNT_SID && config.TWILIO_API_KEY_SID && config.TWILIO_API_KEY_SECRET ? createNumberProvider(config) : null
   ));
   registerAdminRoutes(app, serviceSupabase);
+  const callCenter = registerCallCenter(app, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), config, validateTwilioWebhook);
 
   routes.post("/v1/diagnostics/voice", async (request, reply) => {
     const context = request.context;
@@ -628,6 +633,8 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       voice.hangup();
       return reply.send(voice.toString());
     }
+    const advancedMenu = await callCenter.inbound(routing, body);
+    if (advancedMenu) return reply.send(advancedMenu);
     const menu = renderIvr(routing, config.API_PUBLIC_URL.replace(/\/$/, ""));
     if (menu) return reply.send(menu);
     if (!routing.devices?.length || !routing.callId) {

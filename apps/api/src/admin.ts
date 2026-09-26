@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { adminMemberCreateSchema, adminMemberUpdateSchema, adminIvrUpdateSchema, uuidSchema, type Database } from "@onoff/contracts";
+import { centerStore, checked } from "./call-center-store.js";
 import { isActiveOrganizationAdmin } from "./repositories/access.js";
 
 function fail(reply: FastifyReply, request: FastifyRequest, status: number, code: string, message: string) {
@@ -76,6 +77,8 @@ export function registerAdminRoutes(app: FastifyInstance, service: SupabaseClien
   });
   app.put<{ Params: Params }>(`${base}/lines/:lineId/ivr`, async (request, reply) => {
     const scope = await authorize(request, reply); if (!scope) return;
+    const advanced = checked(await centerStore(scope.service).from("voice_flows").select("published").eq("organization_id",scope.orgId).eq("line_id",request.params.lineId!).maybeSingle());
+    if (advanced?.published?.enabled) return fail(reply,request,409,"advanced_ivr_active","Ce numéro utilise un IVR avancé. Ouvrez IVR & files d’attente pour le modifier.");
     const parsed = adminIvrUpdateSchema.safeParse(request.body);
     if (!parsed.success) return fail(reply, request, 400, "invalid_ivr", "Vérifiez le message, les touches uniques et les destinataires du menu.");
     const { data, error } = await scope.service.rpc("admin_set_ivr", { p_org_id: scope.orgId, p_actor_id: scope.actorId, p_line_id: request.params.lineId!, p_config: parsed.data.config, p_version: parsed.data.version });

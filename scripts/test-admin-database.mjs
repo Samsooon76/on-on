@@ -28,7 +28,8 @@ try {
     try { await db.exec(await readFile(new URL(migration, directory), 'utf8')); }
     catch (error) { throw new Error(`Migration ${migration}: ${error.message}`, { cause: error }); }
   }
-  const results = await db.exec(await readFile(new URL('../supabase/tests/admin_and_ivr.test.sql', import.meta.url), 'utf8'));
+  const results = [];
+  for (const file of ['admin_and_ivr.test.sql', 'live_call_center.test.sql']) results.push(...await db.exec(await readFile(new URL('../supabase/tests/' + file, import.meta.url), 'utf8')));
   console.log(`${migrations.length} migrations applied to isolated PostgreSQL.`);
   for (const result of results) for (const row of result.rows) console.log(Object.values(row).join(' '));
 } catch (error) {
