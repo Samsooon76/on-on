@@ -44,7 +44,9 @@ Les mutations et la lecture des emails sont réservées aux RPC `service_role`. 
 
 `pnpm --filter @onoff/api test`, `pnpm --filter @onoff/web test`, `pnpm typecheck` et `pnpm build` complètent la vérification. L’aperçu navigateur a été vérifié avec des données fictives sur ordinateur et en largeur 390 px.
 
-La migration `20260926080555_web_administration_and_ivr.sql` doit être appliquée au projet Supabase `mzqycbxnbyxeivdduhrl`, puis l’API et le web doivent être déployés. Tous les IVR restent désactivés par défaut. L’ancienne signature `begin_inbound_call` est conservée pour le déploiement progressif ; n’activer aucun IVR avant que la nouvelle API soit en ligne. Régénérer ensuite les types avec `pnpm db:types:online`.
+Les migrations `20260926091137_manage_line_assignments.sql` et `20260926091147_web_administration_and_ivr.sql` doivent être appliquées dans cet ordre au projet Supabase `mzqycbxnbyxeivdduhrl`, puis l’API et le web doivent être déployés. Tous les IVR restent désactivés par défaut. L’ancienne signature `begin_inbound_call` est conservée pour le déploiement progressif ; n’activer aucun IVR avant que la nouvelle API soit en ligne. Régénérer ensuite les types avec `pnpm db:types:online`.
+
+Ces deux migrations ont été appliquées en production le 26 septembre 2026. Leurs noms de fichiers correspondent aux versions enregistrées par Supabase. Après application, la lecture d’administration et les permissions des sept RPC concernées ont été vérifiées, puis l’onglet Administration a chargé le compte administrateur dans le navigateur de production. Une API déployée sans ces migrations peut répondre `503 admin_unavailable`, même si son contrôle de santé général réussit.
 
 Après déploiement, vérifier un compte membre et un compte admin puis effectuer un appel réel vers une ligne IVR avec un appareil web et un appareil mobile enregistré. Aucun compte réel, achat de numéro ou appel payant n’est nécessaire pour les tests automatisés.
 
