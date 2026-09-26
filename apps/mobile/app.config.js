@@ -11,6 +11,7 @@ export default {
     orientation: "portrait",
     userInterfaceStyle: "light",
     plugins: [
+      ["expo-build-properties", { ios: { enableSceneSupport: true } }],
       ["@twilio/voice-react-native-sdk", {
         apsEnvironment: variant === "demo" ? "production" : "development",
         microphoneUsageDescription: "Onoff utilise le microphone pendant vos appels.",

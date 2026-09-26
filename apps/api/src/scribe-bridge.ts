@@ -61,7 +61,8 @@ export class ScribeBridge {
             if (event.text.trim()) this.snapshot.segments.push({ id: partial?.id ?? randomUUID(), speaker, text: event.text.slice(0, 16000), offsetMs: partial?.offsetMs ?? channel.segmentOffset });
             this.snapshot.partials[speaker] = null;
             channel.segmentOffset = channel.offset;
-            channel.bytes = 0;
+            // Keep the received-audio marker: a VAD commit can arrive after the
+            // next utterance has already started, so stop must still flush it.
             channel.pending = false;
             options.onChange(this.snapshot);
             if (this.finishing && [...this.channels.values()].every((item) => !item.pending)) this.dispose();

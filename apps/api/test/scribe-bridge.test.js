@@ -76,6 +76,17 @@ test('quota errors close both sessions once and do not expose provider input', t
   assert.ok(!errors[0].includes('private'));
   assert.ok(sockets.every(socket => socket.closed));
 });
+test('a late VAD commit still permits flushing audio already queued for the next utterance', async t => {
+  const { bridge, sockets } = fixture(t);
+  sockets.forEach(socket => socket.receive({ message_type: 'session_started' }));
+  bridge.audio('inbound', '////', 100, 1);
+  sockets[0].receive({ message_type: 'committed_transcript', text: 'Première phrase.' });
+  const finishing = bridge.finish();
+  assert.equal(sockets[0].sent.at(-1).commit, true);
+  sockets[0].receive({ message_type: 'committed_transcript', text: 'Dernière phrase.' });
+  await finishing;
+  assert.equal(bridge.snapshot.segments.length, 2);
+});
 test('bounded startup buffering fails explicitly rather than silently losing speech', t => {
   const { bridge, errors, sockets } = fixture(t);
   for (let chunk = 1; chunk <= 251; chunk++) bridge.audio('inbound', '////', chunk * 20, chunk);

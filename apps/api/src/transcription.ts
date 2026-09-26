@@ -8,7 +8,7 @@ import type { CenterProvider } from "./call-center-provider.js";
 import { ScribeBridge, type ScribeSocketFactory, type TranscriptSnapshot } from "./scribe-bridge.js";
 
 type TranscriptRow = {
-  id: string; call_id: string; provider_call_sid: string; stream_sid: string | null;
+  id: string; call_id: string; provider_call_sid: string; stream_sid: string | null; stream_connected: boolean;
   status: CallTranscript["status"]; started_at: string; updated_at: string;
   snapshot: TranscriptSnapshot; error: string | null;
 };
@@ -51,7 +51,9 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
   const running = (call: { status: string; ended_at: string | null }) => !call.ended_at && ["initiated", "ringing", "in-progress", "answered"].includes(call.status);
   async function readRow(callId: string): Promise<TranscriptRow | null> {
     if (!db) return null;
-    let row = checked(await db.from("call_transcriptions").select("*").eq("call_id", callId).maybeSingle()) as TranscriptRow | null;
+    const result = await db.from("call_transcriptions").select("*").eq("call_id", callId).maybeSingle();
+    if (!config.TRANSCRIPTION_ENABLED && ["42P01", "PGRST205"].includes(result.error?.code ?? "")) return null;
+    let row = checked(result) as TranscriptRow | null;
     if (row && ["starting", "live", "stopping"].includes(row.status) && Date.now() - Date.parse(row.updated_at) > 25_000) {
       const stale = checked(await db.from("call_transcriptions").update({ status: "error", error: "La transcription a été interrompue. Les phrases reçues sont conservées.", updated_at: new Date().toISOString() }).eq("id", row.id).eq("updated_at", row.updated_at).select("*").maybeSingle()) as TranscriptRow | null;
       if (stale) row = stale;
@@ -63,7 +65,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
       reply.header("cache-control", "no-store");
       const call = await authorizedCall(request, bySid);
       // Disabled installations need not have the migration yet.
-      const row = db && config.TRANSCRIPTION_ENABLED ? await readRow(call.id) : null;
+      const row = await readRow(call.id);
       return transcriptionResponseSchema.parse({ available, callId: call.id, callActive: running(call), transcript: publicTranscript(row) });
     });
   }
@@ -103,6 +105,8 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
       checked(await db!.from("call_transcriptions").update({ status: "stopping" }).eq("id", row.id).in("status", ["starting", "live"]));
       try { await provider!.calls(row.provider_call_sid).streams(`scribe-${row.id}`).update({ status: "stopped" }); }
       catch { /* The owning worker also observes stopping on its next heartbeat. */ }
+      // Stop can beat the WebSocket handshake. No provider session needs draining yet.
+      checked(await db!.from("call_transcriptions").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", row.id).eq("status", "stopping").eq("stream_connected", false));
       await liveSessions.get(row.id)?.();
     }
     return transcriptionResponseSchema.parse({ available, callId: call.id, callActive: running(call), transcript: publicTranscript(await readRow(call.id)) });
@@ -141,7 +145,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
         dirty = false;
         const snapshot = JSON.parse(JSON.stringify(bridge.snapshot)) as TranscriptSnapshot;
         writeChain = writeChain.then(async () => {
-          checked(await db!.from("call_transcriptions").update({ snapshot, updated_at: new Date().toISOString() }).eq("id", id).in("status", ["starting", "live", "stopping"]));
+          checked(await db!.from("call_transcriptions").update({ snapshot, updated_at: new Date().toISOString() }).eq("id", id).in("status", ["starting", "live", "stopping", "error"]));
         }).catch(() => { failed = true; bridge?.dispose(); socket.close(); });
         return writeChain;
       };

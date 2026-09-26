@@ -1,12 +1,14 @@
-.transcript-panel { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 380px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.transcript-panel { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 380px; height: min(65dvh, 600px); color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.transcript-panel .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .transcript-heading { display: flex; align-items: center; gap: 12px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
 .transcript-mark { display: grid; place-items: center; width: 38px; height: 38px; color: var(--accent); background: var(--accent-soft); border-radius: 10px; flex-shrink: 0; }
+.transcript-heading > div { min-width: 0; flex: 1; }
 .transcript-heading h3 { font-size: 15px; font-weight: 550; letter-spacing: -.35px; }
 .transcript-heading p { margin-top: 4px; font-size: 11px; color: var(--muted); }
-.transcript-badge { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.transcript-badge { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 10px; color: var(--muted); max-width: 135px; text-align: right; }
 .transcript-badge.is-live { color: var(--accent); background: var(--accent-soft); padding: 6px 9px; border-radius: 20px; }
 .transcript-badge i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px #24665312; }
-.transcript-scroll { flex: 1; min-height: 280px; height: min(48dvh, 470px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d6ded8 transparent; }
+.transcript-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d6ded8 transparent; }
 .transcript-empty { min-height: 100%; padding: 40px 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .transcript-orbit { display: grid; place-items: center; width: 78px; height: 78px; margin: 2px 0 28px; border-radius: 50%; color: var(--accent); background: #f3f7f4; box-shadow: 0 0 0 12px #f8faf8, 0 0 0 13px #eff3ef; }
 .transcript-orbit.listening { animation: transcript-breathe 2.5s ease-in-out infinite; }
@@ -36,7 +38,7 @@
 .transcript-modal { width: min(720px, calc(100vw - 32px)); }
 .transcript-modal .transcript-panel { border: 0; }
 .transcript-modal .transcript-heading { padding-top: 8px; }
-.call-dialog.has-transcript { width: min(1010px, calc(100vw - 32px)); }
+.call-dialog.has-transcript { width: min(1010px, calc(100vw - 32px)); max-width: 1010px; }
 .call-dialog-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
 .has-transcript .call-dialog-layout { grid-template-columns: minmax(230px, .8fr) minmax(0, 1.2fr); gap: 28px; align-items: stretch; }
 .has-transcript .call-console { display: flex; flex-direction: column; justify-content: center; }
@@ -44,4 +46,4 @@
 @keyframes transcript-breathe { 50% { opacity: .5; } }
 @keyframes transcript-appear { from { opacity: 0; transform: translateY(4px); } }
 @media (prefers-reduced-motion: reduce) { .transcript-orbit.listening, .transcript-line, .transcript-caret { animation: none; } }
-@media (max-width: 720px) { .has-transcript .call-dialog-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; } .has-transcript .call-party { padding: 4px; } .transcript-heading { padding: 18px 16px; gap: 8px; } .transcript-lines { padding: 24px 16px; } .transcript-footer { padding: 10px 16px; } .transcript-footer-detail { display: none; } .transcript-scroll { height: 40dvh; } .transcript-heading p { display: none; } }
+@media (max-width: 720px) { .has-transcript .call-dialog-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; } .has-transcript .call-party { padding: 4px; } .transcript-heading { padding: 18px 16px; gap: 8px; } .transcript-lines { padding: 24px 16px; } .transcript-footer { padding: 10px 16px; } .transcript-footer-detail { display: none; } .has-transcript .transcript-panel { height: calc(100dvh - 400px); min-height: 300px; } .transcript-heading p { display: none; } }
