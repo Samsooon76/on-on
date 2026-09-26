@@ -11,6 +11,8 @@ import { findAssignedLine, getActiveOrganizationIds, isActiveOrganizationAdmin }
 import { persistLineAssignment } from "./repositories/line-assignments.js";
 import { createVoiceAccessToken } from "./voice.js";
 import { createNumberProvider, registerNumberRoutes, type NumberProvider } from "./number-provisioning.js";
+import { registerAdminRoutes } from "./admin.js";
+import { renderIvr } from "./ivr.js";
 
 export type RequestContext = {
   userId: string;
@@ -257,6 +259,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
   registerNumberRoutes(routes, config, serviceSupabase, dependencies.numberProvider ?? (
     config.TWILIO_ACCOUNT_SID && config.TWILIO_API_KEY_SID && config.TWILIO_API_KEY_SECRET ? createNumberProvider(config) : null
   ));
+  registerAdminRoutes(app, serviceSupabase);
 
   routes.post("/v1/diagnostics/voice", async (request, reply) => {
     const context = request.context;
@@ -588,7 +591,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     return reply.send(voice.toString());
   });
 
-  routes.post("/webhooks/twilio/voice/inbound", async (request, reply) => {
+  const inboundVoiceHandler: import("fastify").RouteHandlerMethod = async (request, reply) => {
     reply.type("text/xml; charset=utf-8");
     if (!validateTwilioWebhook(request)) return reply.code(403).send("<Response><Hangup/></Response>");
     const body = request.body as Record<string, string>;
@@ -600,18 +603,24 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     }
     if (!config.VOICE_ENABLED || !serviceSupabase) return reply.code(503).send("<Response><Hangup/></Response>");
 
-    const { data, error } = await serviceSupabase.rpc("begin_inbound_call", {
+    const isChoice = request.url.split("?")[0] === "/webhooks/twilio/voice/ivr";
+    const attempt = new URL(request.url, config.API_PUBLIC_URL).searchParams.get("attempt");
+    if (isChoice && (!attempt || !/^[1-3]$/.test(attempt) || (body.Digits !== undefined && !/^[0-9]?$/.test(body.Digits)))) return reply.code(400).send("<Response><Hangup/></Response>");
+    const args = {
       p_account_sid: body.AccountSid,
       p_call_sid: body.CallSid!,
       p_from: body.From!,
       p_to: body.To!,
       p_max_ringing_devices: config.MAX_RINGING_DEVICES,
-    });
+    };
+    const { data, error } = isChoice
+      ? await serviceSupabase.rpc("route_inbound_call", { ...args, p_digits: body.Digits ?? "", p_attempt: Number(attempt) })
+      : await serviceSupabase.rpc("begin_inbound_call", args);
     if (error || !data || typeof data !== "object" || Array.isArray(data)) {
       request.log.warn({ code: error?.code, requestId: request.id }, "inbound voice routing unavailable");
       return reply.code(503).send("<Response><Hangup/></Response>");
     }
-    const routing = data as { allowed?: boolean; duplicate?: boolean; callId?: string; organizationId?: string; lineId?: string; callerNumber?: string; devices?: { deviceId: string; identity: string }[] };
+    const routing = data as { allowed?: boolean; duplicate?: boolean; callId?: string; organizationId?: string; lineId?: string; callerNumber?: string; devices?: { deviceId: string; identity: string }[]; ivr?: unknown; attempt?: number; hangup?: boolean; language?: string };
     request.log.info({ requestId: request.id, organizationId: routing.organizationId, lineId: routing.lineId, callId: routing.callId, callSid: body.CallSid, allowed: routing.allowed === true, duplicate: routing.duplicate === true, ringingDeviceCount: routing.devices?.length ?? 0 }, "inbound voice call routed");
     const voice = new twilio.twiml.VoiceResponse();
     if (!routing.allowed) {
@@ -619,6 +628,8 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       voice.hangup();
       return reply.send(voice.toString());
     }
+    const menu = renderIvr(routing, config.API_PUBLIC_URL.replace(/\/$/, ""));
+    if (menu) return reply.send(menu);
     if (!routing.devices?.length || !routing.callId) {
       voice.say({ language: "fr-FR" }, "Aucun appareil n’est disponible pour répondre.");
       voice.hangup();
@@ -638,12 +649,15 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
         statusCallback: `${callbackBase}/webhooks/twilio/voice/status`,
         statusCallbackMethod: "POST",
         statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      }, device.identity);
+      });
+      client.identity(device.identity);
       client.parameter({ name: "CallId", value: routing.callId });
       client.parameter({ name: "From", value: routing.callerNumber ?? body.From! });
     }
     return reply.send(voice.toString());
-  });
+  };
+  routes.post("/webhooks/twilio/voice/inbound", inboundVoiceHandler);
+  routes.post("/webhooks/twilio/voice/ivr", inboundVoiceHandler);
 
   routes.post("/webhooks/twilio/voice/status", async (request, reply) => {
     if (!validateTwilioWebhook(request)) return reply.code(403).send({ code: "invalid_signature" });

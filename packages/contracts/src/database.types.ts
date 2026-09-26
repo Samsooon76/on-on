@@ -275,6 +275,7 @@ export type Database = {
       }
       calls: {
         Row: {
+          ivr_state: Json | null
           answered_at: string | null
           created_at: string
           direction: string
@@ -290,6 +291,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          ivr_state?: Json | null
           answered_at?: string | null
           created_at?: string
           direction: string
@@ -305,6 +307,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          ivr_state?: Json | null
           answered_at?: string | null
           created_at?: string
           direction?: string
@@ -649,6 +652,7 @@ export type Database = {
       }
       lines: {
         Row: {
+          ivr_config: Json
           created_at: string
           id: string
           organization_id: string
@@ -661,6 +665,7 @@ export type Database = {
           voice_enabled: boolean
         }
         Insert: {
+          ivr_config?: Json
           created_at?: string
           id?: string
           organization_id: string
@@ -673,6 +678,7 @@ export type Database = {
           voice_enabled?: boolean
         }
         Update: {
+          ivr_config?: Json
           created_at?: string
           id?: string
           organization_id?: string
@@ -696,6 +702,7 @@ export type Database = {
       }
       memberships: {
         Row: {
+          display_name: string
           created_at: string
           organization_id: string
           role: string
@@ -704,6 +711,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          display_name?: string
           created_at?: string
           organization_id: string
           role?: string
@@ -712,6 +720,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          display_name?: string
           created_at?: string
           organization_id?: string
           role?: string
@@ -1046,6 +1055,26 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      admin_snapshot: {
+        Args: { p_org_id: string; p_actor_id: string }
+        Returns: Json
+      }
+      admin_create_member: {
+        Args: { p_org_id: string; p_actor_id: string; p_user_id: string; p_display_name: string; p_role: string }
+        Returns: string
+      }
+      admin_update_member: {
+        Args: { p_org_id: string; p_actor_id: string; p_user_id: string; p_display_name: string; p_role: string; p_status: string; p_version: string }
+        Returns: string
+      }
+      admin_set_ivr: {
+        Args: { p_org_id: string; p_actor_id: string; p_line_id: string; p_config: Json; p_version: string }
+        Returns: string
+      }
+      route_inbound_call: {
+        Args: { p_account_sid: string; p_call_sid: string; p_from: string; p_to: string; p_max_ringing_devices?: number; p_digits?: string; p_attempt?: number }
+        Returns: Json
+      }
       apply_call_status: {
         Args: {
           p_account_sid: string

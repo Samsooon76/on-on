@@ -22,6 +22,8 @@ Les appels et SMS sont désactivés tant que les valeurs Twilio vérifiées de l
 
 ## Documentation
 
+- [Administration, rôles, permissions et IVR](docs/administration.md)
+
 - [Périmètre MVP](docs/mvp-scope.md)
 - [Scénarios de démonstration](docs/demo-scenarios.md)
 - [Architecture](docs/architecture.md)

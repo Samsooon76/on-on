@@ -1,4 +1,5 @@
 import { z } from "zod";
+export * from "./admin.js";
 
 export type { Database, Json } from "./database.types.js";
 

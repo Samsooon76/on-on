@@ -13,9 +13,11 @@
     "test": "pnpm --filter @onoff/contracts build && pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-web build && pnpm --filter @onoff/voice-native build && pnpm --filter @onoff/api build && pnpm -r test",
     "db:migrations:online": "pnpm exec supabase migration list --project-ref mzqycbxnbyxeivdduhrl",
     "db:push:online": "pnpm exec supabase db push --project-ref mzqycbxnbyxeivdduhrl",
-    "db:types:online": "pnpm exec supabase gen types typescript --project-id mzqycbxnbyxeivdduhrl > packages/contracts/src/database.types.ts"
+    "db:types:online": "pnpm exec supabase gen types typescript --project-id mzqycbxnbyxeivdduhrl > packages/contracts/src/database.types.ts",
+    "test:admin:db": "node scripts/test-admin-database.mjs"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.3.14",
     "@types/node": "24.10.0",
     "supabase": "2.117.0",
     "tsx": "4.20.6",
