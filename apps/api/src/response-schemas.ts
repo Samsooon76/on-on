@@ -13,6 +13,7 @@ import {
   numberPurchaseSchema,
   uuidSchema,
   voiceTargetSchema,
+  webhookCreateSchema, webhookUpdateSchema, webhookEndpointSchema, webhookDeliverySchema,
 } from "@onoff/contracts";
 import { z } from "zod";
 
@@ -224,6 +225,17 @@ export const successResponseSchemas = new Map<string, Record<number, z.ZodType>>
     422: z.object({ code: z.string(), message: z.string(), requestId: uuidSchema, id: uuidSchema, status: z.literal("failed") }),
   }],
 ]);
+
+const webhookRoot = "/v1/organizations/:orgId/webhooks";
+requestBodySchemas.set(`POST ${webhookRoot}`, webhookCreateSchema);
+requestBodySchemas.set(`PATCH ${webhookRoot}/:id`, webhookUpdateSchema);
+successResponseSchemas.set(`GET ${webhookRoot}`, { 200: z.object({ items: z.array(webhookEndpointSchema) }) });
+successResponseSchemas.set(`POST ${webhookRoot}`, { 201: webhookEndpointSchema.extend({ secret: z.string() }) });
+successResponseSchemas.set(`PATCH ${webhookRoot}/:id`, { 200: webhookEndpointSchema });
+successResponseSchemas.set(`POST ${webhookRoot}/:id/rotate-secret`, { 200: z.object({ secret: z.string() }) });
+successResponseSchemas.set(`POST ${webhookRoot}/:id/test`, { 202: z.object({ eventId: uuidSchema }) });
+successResponseSchemas.set(`POST ${webhookRoot}/:id/deliveries/:deliveryId/retry`, { 202: z.object({ eventId: uuidSchema }) });
+successResponseSchemas.set(`GET ${webhookRoot}/:id/deliveries`, { 200: z.object({ items: z.array(webhookDeliverySchema) }) });
 
 export function responsesForRoute(method: string, url: string): Record<string | number, z.ZodType> | null {
   const success = successResponseSchemas.get(`${method} ${url}`);

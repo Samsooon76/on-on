@@ -44,7 +44,7 @@ export function ConversationThread(props: {
   refreshing: boolean; body: string; recipientEditable: boolean; locked: boolean; pending: boolean; recoveryReady: boolean;
   busy: boolean; canSms: boolean; canCall: boolean; segments: number; bottomInset: number;
   onOlder(): void; onMoreCalls(): void; onRetry(): void; onRefresh(): void; onBody(body: string): void;
-  onDestination(number: string): void; onSend(): void; onCall(): void;
+  onDestination(number: string): void; onSend(): void; onCall(): void; onTranscript(callId: string): void;
 }) {
   const [filter, setFilter] = useState<"all" | "message" | "call">("all");
   const timeline = useMemo(() => buildTimeline(props.messages, props.calls).filter((event) => filter === "all" || event.kind === filter).reverse(), [props.messages, props.calls, filter]);
@@ -85,6 +85,7 @@ export function ConversationThread(props: {
           </View> : <View style={[s.callEvent, isMissedCall(event.call) && s.missedCall]}>
             <View style={[s.callIcon, isMissedCall(event.call) && styles.missedIcon]}><Icon name={isMissedCall(event.call) ? "call-outline" : event.call.direction === "inbound" ? "arrow-down-outline" : "arrow-up-outline"} size={18} color={isMissedCall(event.call) ? palette.red : palette.accent} /></View>
             <View style={styles.rowCopy}><Text style={[s.callTitle, isMissedCall(event.call) && styles.missedText]}>{callLabel(event.call)}</Text><Text style={styles.rowMeta}>{event.call.duration_seconds ? formatDuration(event.call.duration_seconds) : callStatusLabel(event.call.status)} · {time(event.createdAt)}</Text></View>
+            <IconButton icon="document-text-outline" label="Voir la transcription de cet appel" onPress={() => props.onTranscript(event.call.id)} />
             <IconButton icon="call-outline" label={`Rappeler ${props.name ?? props.number}`} disabled={!props.canCall || props.busy || !isDialableNumber(props.number)} onPress={props.onCall} />
           </View>}
         </View>;

@@ -96,7 +96,7 @@
 .pd-summary-counts { display: flex; flex-wrap: wrap; justify-content: center; gap: 25px; margin: 18px 0; }
 .pd-summary-counts strong { display: block; font-size: 26px; font-weight: 400; }
 .pd-summary-counts span { display: block; font-size: 10px; color: #6c7d72; margin-top: 8px; }
-.pd-picker, .pd-summary-modal { width: min(560px, calc(100vw - 32px)); }
+.modal.pd-picker, .modal.pd-summary-modal { width: min(560px, calc(100vw - 32px)); }
 .pd-modal-description { font-size: 12px; line-height: 1.75; color: #68786d; margin: 0 0 20px; }
 .pd-picker .search-field { margin-bottom: 17px; }
 .pd-picker-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; color: #67786d; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
@@ -182,3 +182,68 @@
   .pd-controls { padding-block: 13px; }
   .pd-shortcuts { padding: 8px; }
 }
+
+/* Campaign setup shares the calling workspace's restrained green palette. */
+.pd-directory-link { margin-top: 15px; }
+.pd-campaign-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; padding: 10px 32px; font-size: 10px; color: #697b70; border-bottom: 1px solid var(--line); }
+.pd-notice { margin: 0; padding: 12px 32px; font-size: 12px; line-height: 1.7; color: #715d32; background: #fcf8ed; border-bottom: 1px solid #eee4cd; }
+.pd-notice .text-button { margin-left: 12px; }
+.pd-attempt-count { font-size: 9px; }
+.pd-script, .pd-attempt-history { margin-top: 14px; color: #5e7466; font-size: 11px; line-height: 1.75; }
+.pd-script { background: #f6f9f6; padding: 12px 14px; border-radius: 6px; }
+.pd-script summary, .pd-attempt-history summary, .pd-import-issues summary { cursor: pointer; font-weight: 500; }
+.pd-script p, .pd-attempt-history p { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 7px; }
+.modal.pd-import-modal { width: min(710px, calc(100vw - 32px)); }
+.modal.pd-settings-modal { width: min(600px, calc(100vw - 32px)); }
+.modal.pd-callback-modal { width: min(480px, calc(100vw - 32px)); }
+.pd-upload { position: relative; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 28px 18px; border: 1px dashed #9ab6a3; border-radius: 8px; background: #f5f9f6; color: #446651; text-align: center; cursor: pointer; }
+.pd-upload:hover, .pd-upload:focus-within { background: #edf5ef; border-color: #426c51; }
+.pd-upload strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.pd-upload span { font-size: 11px; color: #718377; }
+.pd-upload input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+.pd-import-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 17px 0 22px; font-size: 11px; color: #586d60; }
+.pd-import-toolbar label, .pd-checkbox { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.pd-import-modal input[type=checkbox], .pd-settings-modal input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; }
+.pd-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 20px; margin: 17px 0; }
+.pd-form-grid label, .pd-field { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: #496151; min-width: 0; }
+.pd-field { margin: 17px 0; }
+.pd-form-grid input, .pd-form-grid select, .pd-field input, .pd-field select, .pd-field textarea, .pd-retry-rule input[type=number] { width: 100%; min-width: 0; border: 1px solid #d7e1da; border-radius: 6px; color: var(--ink); background: white; padding: 10px; font: inherit; font-size: 12px; }
+.pd-field textarea { resize: vertical; line-height: 1.7; }
+.pd-form-hint { font-size: 11px; line-height: 1.7; color: #718076; margin: 10px 0; }
+.pd-import-counts { display: flex; gap: 14px; flex-wrap: wrap; padding: 14px 0; color: #62766a; font-size: 11px; }
+.pd-import-counts strong { color: var(--accent); font-weight: 600; }
+.pd-table-scroll { overflow: auto; }
+.pd-preview-table { width: 100%; border-collapse: collapse; font-size: 11px; text-align: left; }
+.pd-preview-table caption { text-align: left; font-size: 10px; color: #75867a; padding: 4px 0 12px; }
+.pd-preview-table th { font-weight: 500; color: #51695a; background: #f5f8f5; }
+.pd-preview-table td, .pd-preview-table th { padding: 10px; border-bottom: 1px solid var(--line); max-width: 230px; overflow-wrap: anywhere; }
+.pd-preview-table td:nth-child(2) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pd-import-issues { margin: 17px 0; font-size: 11px; color: #8a673f; line-height: 1.75; }
+.pd-import-issues p { overflow-wrap: anywhere; margin: 6px 0; }
+.pd-import-issues .text-button { margin-top: 10px; }
+.pd-settings-section { border: 0; border-top: 1px solid var(--line); padding: 18px 0 12px; margin: 22px 0; min-width: 0; }
+.pd-settings-section legend { font-size: 13px; color: #395642; font-weight: 500; padding-right: 12px; }
+.pd-checkbox { font-size: 12px; color: #496151; line-height: 1.7; }
+.pd-retry-rule { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 13px 0; }
+.pd-retry-rule > label:last-child { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #718076; }
+.pd-retry-rule input[type=number] { width: 85px; }
+.pd-retry-rule:has(input:disabled) { opacity: .65; }
+.pd-days { display: flex; flex-wrap: wrap; gap: 14px; margin: 17px 0; }
+.pd-days label { display: flex; gap: 5px; align-items: center; font-size: 11px; color: #587061; }
+.pd-scheduled-actions { display: flex; justify-content: flex-start !important; gap: 16px; margin-top: 12px; }
+.pd-summary-list article > div { flex-wrap: wrap; }
+.pd-import-modal .modal-actions, .pd-settings-modal .modal-actions, .pd-callback-modal .modal-actions { flex-wrap: wrap; }
+@media (max-width: 767px) {
+  .pd-campaign-meta { padding: 12px 20px; gap: 8px 15px; }
+  .pd-notice { padding: 12px 20px; }
+  .pd-header-actions { gap: 7px; }
+  .pd-header-actions .button { flex: 1 1 auto; }
+  .pd-form-grid { gap: 14px 10px; }
+  .pd-form-grid input, .pd-form-grid select, .pd-field input, .pd-field select, .pd-field textarea { font-size: 16px; }
+}
+@media (max-width: 380px) {
+  .pd-form-grid { grid-template-columns: 1fr; }
+  .pd-retry-rule { align-items: flex-start; flex-direction: column; }
+}
+.pd-header > div:first-child { min-width: 0; }
+.pd-title h2 { overflow-wrap: anywhere; }

@@ -19,6 +19,10 @@ import { deliverPreparedSms, type SmsProvider } from "./sms-delivery.js";
 import { renderIvr } from "./ivr.js";
 import { registerCallCenter } from "./call-center.js";
 import { createCenterProvider, type CenterProvider } from "./call-center-provider.js";
+import { registerCustomerWebhooks } from "./customer-webhooks.js";
+import { registerApiDocumentation } from "./api-documentation.js";
+import { registerTranscription } from "./transcription.js";
+import type { ScribeSocketFactory } from "./scribe-bridge.js";
 
 export type RequestContext = {
   userId: string;
@@ -33,6 +37,7 @@ export type ApiDependencies = {
   createSmsProvider?: (apiKeySid: string, apiKeySecret: string, accountSid: string) => SmsProvider;
   numberProvider?: NumberProvider;
   centerProvider?: CenterProvider;
+  scribeSocketFactory?: ScribeSocketFactory;
 };
 
 type PageCursor = { createdAt: string; id: string };
@@ -206,13 +211,14 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       ? caught as Error & { statusCode?: number }
       : new Error("Unknown request error");
     request.log.error({ name: error.name, statusCode: error.statusCode, requestId: request.id }, "request failed");
-    const statusCode = error.statusCode && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
+    const statusCode = error.statusCode && ((error.statusCode >= 400 && error.statusCode < 500) || error.statusCode === 503) ? error.statusCode : 500;
     const code = statusCode === 500 ? "internal_error" : "request_error";
     const message = statusCode === 500 ? "Une erreur inattendue est survenue." : error.message;
     return reply.code(statusCode).send({ code, message, requestId: request.id });
   });
 
   const routes = app.withTypeProvider<ZodTypeProvider>();
+  registerApiDocumentation(app, config);
 
   routes.get("/health/live", async () => ({ status: "ok", version: config.API_VERSION }));
   routes.get("/health/ready", async (_request, reply) => {
@@ -254,6 +260,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     request.context = { userId: data.user.id, accessToken: match[1], supabase: userClient };
   });
 
+  registerCustomerWebhooks(routes, config, serviceSupabase);
   registerNumberRoutes(routes, config, serviceSupabase, dependencies.numberProvider ?? (
     config.TWILIO_ACCOUNT_SID && config.TWILIO_API_KEY_SID && config.TWILIO_API_KEY_SECRET ? createNumberProvider(config) : null
   ));
@@ -265,6 +272,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
   registerStatisticsRoutes(app, serviceSupabase);
   registerMcp(app, config, serviceSupabase, makeSupabaseClient, makeSmsProvider);
   const callCenter = registerCallCenter(app, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), config, validateTwilioWebhook);
+  registerTranscription(app, config, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), validateTwilioWebhook, dependencies.scribeSocketFactory);
 
   routes.post("/v1/diagnostics/voice", async (request, reply) => {
     const context = request.context;

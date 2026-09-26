@@ -54,7 +54,7 @@ test('double start, repeated qualification, and duplicate end events do not adva
 test('pause during a call preserves notes and classification, prevents automatic next call', () => {
   let state = reduce(start(), { type: 'notes', id: contacts[0].id, notes: 'Rappeler jeudi' });
   state = reduce(state, { type: 'pause' });
-  state = end(qualify(state, { outcome: 'callback' }));
+  state = end(qualify(state, { outcome: 'callback', callbackAt: '2026-09-27T10:00:00Z' }));
   assert.equal(state.phase, 'ready');
   assert.equal(state.running, false);
   assert.equal(state.entries[0].notes, 'Rappeler jeudi');

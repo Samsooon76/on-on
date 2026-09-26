@@ -87,7 +87,11 @@ export class TwilioWebVoiceClient implements VoiceClient {
   private bindCall(call: Call, incoming: boolean): void {
     this.activeCall = call;
     const emit = (event: VoiceEvent) => { if (this.activeCall === call) this.emit(event); };
-    call.on("accept", () => emit({ type: "active" }));
+    const emitActive = () => {
+      const providerCallSid = call.parameters?.CallSid;
+      emit({ type: "active", ...(providerCallSid ? { providerCallSid } : {}) });
+    };
+    call.on("accept", emitActive);
     call.on("ringing", () => emit({ type: "ringing" }));
     call.on("mute", (muted) => emit({ type: "muted", muted }));
     call.on("reconnecting", () => emit({ type: "reconnecting" }));
@@ -97,7 +101,7 @@ export class TwilioWebVoiceClient implements VoiceClient {
     call.on("reject", () => this.finish(call, "rejected"));
     call.on("error", () => this.finish(call, "failed"));
     // connect() can resolve after a fast SDK transition. Read its actual state.
-    if (!incoming && call.status() === "open") emit({ type: "active" });
+    if (!incoming && call.status() === "open") emitActive();
     else if (!incoming && call.status() === "ringing") emit({ type: "ringing" });
   }
 

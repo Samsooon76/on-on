@@ -1,4 +1,5 @@
 export * from "./conversations.js";
+export * from "./transcription.js";
 
 export type QueryValue = string | number | boolean | null | undefined;
 export type Query = Readonly<Record<string, QueryValue>>;

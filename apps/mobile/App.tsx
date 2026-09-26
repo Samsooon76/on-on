@@ -6,6 +6,8 @@ import * as SecureStore from "expo-secure-store";
 import * as Linking from "expo-linking";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
+import { CallTranscript } from "./src/CallTranscript";
+import type { TranscriptTarget } from "@onoff/api-client";
 import { Dialer } from "./src/Dialer";
 import { ConversationInbox, ConversationThread } from "./src/Conversations";
 import { mergeRecords } from "./src/conversation-model";
@@ -101,6 +103,9 @@ function MobileApp() {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>("conversations");
   const [destination, setDestination] = useState("");
+  const [providerCallSid, setProviderCallSid] = useState("");
+  const [transcriptTarget, setTranscriptTarget] = useState<TranscriptTarget | null>(null);
+  useEffect(() => { setTranscriptTarget(null); setProviderCallSid(""); }, [session?.user.id, selectedOrg, selectedLineId]);
   const [voiceStatus, setVoiceStatus] = useState("Ligne inactive");
   const [callStatus, setCallStatus] = useState<"idle" | "connecting" | "ringing" | "active" | "reconnecting">("idle");
   const [incomingNumber, setIncomingNumber] = useState("");
@@ -353,9 +358,12 @@ function MobileApp() {
           setIncomingNumber(event.from);
           setCallStatus("ringing");
           break;
-        case "connecting": setCallStatus("connecting"); break;
+        case "connecting": setProviderCallSid(""); setCallStatus("connecting"); break;
         case "ringing": setCallStatus("ringing"); break;
         case "active":
+          setProviderCallSid(event.providerCallSid ?? "");
+          setIncomingNumber(""); setCallStatus("active");
+          break;
         case "reconnected":
           setIncomingNumber("");
           setCallStatus("active");
@@ -1086,8 +1094,10 @@ function MobileApp() {
         <SmallButton label="Audio" quiet onPress={() => void changeAudioRoute()} />
         <SmallButton label="Raccrocher" danger onPress={() => voiceRef.current?.hangUp()} />
       </>}</View>
+      {!!providerCallSid && callStatus === "active" && <Touch accessibilityLabel="Voir la transcription en direct" style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 44, paddingTop: 8 }} onPress={() => setTranscriptTarget({ providerCallSid })}><Icon name="document-text-outline" size={18} color={palette.accent} /><Text style={{ color: palette.accent, fontSize: 13, flex: 1 }}>Transcription en direct</Text><Icon name="chevron-forward" size={16} color={palette.accent} /></Touch>}
       {keypadVisible && !incomingNumber && <View style={styles.keypad}>{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => <Touch key={digit} accessibilityLabel={`Tonalité ${digit}`} style={styles.keypadKey} onPress={() => { feedback(); voiceRef.current?.sendDigits(digit); }}><Text style={styles.keypadDigit}>{digit}</Text></Touch>)}</View>}
     </View>}
+    {transcriptTarget && <CallTranscript key={`${session.user.id}:${selectedOrg}:${transcriptTarget.callId ?? transcriptTarget.providerCallSid}`} api={api} target={transcriptTarget} onClose={() => setTranscriptTarget(null)} onHangup={callStatus === "active" || callStatus === "reconnecting" ? () => voiceRef.current?.hangUp() : undefined} />}
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={insets.top + (isThread ? 90 : 100)}>
       {activeTab === "calls" && <FlatList
         data={visibleCalls} keyExtractor={(item) => item.id} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}
@@ -1097,7 +1107,7 @@ function MobileApp() {
         renderItem={({ item }) => <Touch accessibilityLabel={`${item.remoteContactName ?? item.remote_number}, ${isMissedCall(item) ? "appel manqué" : item.direction === "outbound" ? "appel sortant" : "appel entrant"}. Ouvrir la conversation`} style={styles.listRow} onPress={() => newMessage(item.remote_number)}>
           <View style={[styles.roundIcon, isMissedCall(item) && styles.missedIcon]}><Icon name={isMissedCall(item) ? "call-outline" : item.direction === "outbound" ? "arrow-up-outline" : "arrow-down-outline"} color={isMissedCall(item) ? palette.red : palette.accent} size={21} /></View>
           <View style={styles.rowCopy}><Text numberOfLines={1} style={[styles.rowTitle, isMissedCall(item) && styles.missedText]}>{item.remoteContactName ?? item.remote_number}</Text><Text numberOfLines={1} style={styles.rowMeta}>{item.direction === "outbound" ? "Sortant" : "Entrant"} · {callStatusLabel(item.status)}{item.duration_seconds ? ` · ${Math.floor(item.duration_seconds / 60)}:${String(item.duration_seconds % 60).padStart(2, "0")}` : ""}</Text></View>
-          <View style={styles.rowTrailing}><Text style={styles.rowDate}>{relativeCallDate(item.created_at)}</Text><Icon name="chevron-forward" size={17} color={palette.muted} /></View>
+          <View style={styles.rowTrailing}><IconButton icon="document-text-outline" label="Voir la transcription de cet appel" onPress={() => setTranscriptTarget({ callId: item.id })} /><Text style={styles.rowDate}>{relativeCallDate(item.created_at)}</Text><Icon name="chevron-forward" size={17} color={palette.muted} /></View>
         </Touch>}
       />}
       {activeTab === "contacts" && <FlatList
@@ -1126,6 +1136,7 @@ function MobileApp() {
         locked={smsLocked} pending={Boolean(pendingSmsAttempt)} recoveryReady={smsRecoveryState === "ready"} busy={busy}
         canSms={Boolean(activeLine?.sms_enabled && activeAssignment?.can_sms)} canCall={canCall}
         segments={smsSegmentInfo.segments} onSend={() => void sendMessage()} onCall={() => openDialer(messageDestination)}
+        onTranscript={(callId) => setTranscriptTarget({ callId })}
         bottomInset={keyboardVisible ? 0 : insets.bottom}
       />}
       {activeTab === "settings" && <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -1148,7 +1159,8 @@ function MobileApp() {
     </View></View>}
     {dialerVisible && <Dialer initialNumber={destination} lineNumber={activeLine?.phone_number} canCall={canCall} unavailableReason={callUnavailableReason} busy={busy} notice={notice} onClose={(number) => { setDestination(number); setDialerVisible(false); }} onCall={startCall} onContacts={(number) => { setDestination(number); setDialerVisible(false); changeTab("contacts"); }} />}
     <Sheet visible={contactFormVisible} title="Nouveau contact" closeDisabled={busy} onClose={() => setContactFormVisible(false)}>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}><ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}><ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.hint}>Un contact partagé avec toute votre équipe.</Text>
         <View><Text style={styles.fieldLabel}>Nom</Text><TextInput accessibilityLabel="Nom du contact" style={styles.input} placeholder="Prénom et nom" placeholderTextColor={palette.muted} value={contactName} onChangeText={setContactName} autoComplete="name" maxLength={120} />
           <Text style={styles.fieldLabel}>Téléphone</Text><TextInput accessibilityLabel="Téléphone du contact" style={styles.input} placeholder="Numéro international" placeholderTextColor={palette.muted} keyboardType="phone-pad" value={contactPhone} onChangeText={setContactPhone} />

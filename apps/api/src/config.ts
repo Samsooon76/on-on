@@ -21,8 +21,12 @@ const envSchema = z.object({
   SUPABASE_URL: z.url(),
   SUPABASE_PUBLISHABLE_KEY: z.string().min(10),
   SUPABASE_SECRET_KEY: z.string().optional(),
+  WEBHOOK_ENCRYPTION_KEY: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, "Clé de chiffrement des webhooks : 32 octets encodés en base64.").optional(),
   MCP_ENABLED: bool.default(false),
   VOICE_ENABLED: bool.default(false),
+  TRANSCRIPTION_ENABLED: bool.default(false),
+  ELEVENLABS_API_KEY: z.string().min(1).optional(),
+  ELEVENLABS_LANGUAGE_CODE: z.string().regex(/^[a-z]{2,3}$/).optional(),
   SMS_ENABLED: bool.default(false),
   OPERATIONS_PAUSED: bool.default(false),
   OPERATIONS_PAUSE_MESSAGE: z.string().trim().min(1).max(240).default("Les créations d’appels et de SMS sont temporairement suspendues pour maintenance. Réessayez un peu plus tard."),
@@ -38,6 +42,12 @@ const envSchema = z.object({
   MAX_ACTIVE_CALL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
   MAX_RINGING_DEVICES: z.coerce.number().int().min(1).max(8).default(4),
 }).superRefine((value, ctx) => {
+  if (value.WEBHOOK_ENCRYPTION_KEY && !value.SUPABASE_SECRET_KEY) {
+    ctx.addIssue({ code: "custom", path: ["WEBHOOK_ENCRYPTION_KEY"], message: "Les webhooks exigent une clé Supabase serveur." });
+  }
+  if (value.TRANSCRIPTION_ENABLED && (!value.VOICE_ENABLED || !value.ELEVENLABS_API_KEY || !value.API_PUBLIC_URL.startsWith("https://"))) {
+    ctx.addIssue({ code: "custom", path: ["TRANSCRIPTION_ENABLED"], message: "La transcription exige la voix activée, ELEVENLABS_API_KEY et une API publique HTTPS." });
+  }
   if (value.MCP_ENABLED && (!value.SUPABASE_SECRET_KEY || (value.APP_ENV !== "dev" && (!value.API_PUBLIC_URL.startsWith("https://") || !value.WEB_PUBLIC_URL.startsWith("https://"))))) {
     ctx.addIssue({ code: "custom", path: ["MCP_ENABLED"], message: "Le MCP exige une clé Supabase serveur et des URL HTTPS hors développement." });
   }

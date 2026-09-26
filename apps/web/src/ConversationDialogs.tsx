@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ArrowRight, Backspace, ChatCircle, Microphone, MicrophoneSlash, Phone, PhoneDisconnect, PhoneX } from "@phosphor-icons/react";
 import { normalizePhoneNumber } from "@onoff/contracts";
 import type { ApiPage } from "@onoff/api-client";
@@ -28,15 +28,18 @@ export function NewConversation({ scope, loadContacts, onOpen, onClose }: { scop
 export function CallDialog(props: {
   number: string; name: string | null; line: string; status: string;
   state: "idle" | "connecting" | "ringing" | "active"; incoming: string; muted: boolean;
-  enabled: boolean; busy: boolean;
+  enabled: boolean; busy: boolean; transcript?: ReactNode;
   onNumber(number: string): void; onClose(): void; onCall(): void; onAccept(): void;
   onReject(): void; onHangup(): void; onMute(): void; onDigit(digit: string): void;
 }) {
   const active = props.state !== "idle" || Boolean(props.incoming);
-  return <Modal title={props.incoming ? "Appel entrant" : active ? "Votre appel" : "Nouvel appel"} onClose={props.onClose} className="call-dialog">
+  const [keypadOpen, setKeypadOpen] = useState(false);
+  return <Modal title={props.incoming ? "Appel entrant" : active ? "Votre appel" : "Nouvel appel"} onClose={props.onClose} className={`call-dialog${props.transcript ? " has-transcript" : ""}`}><div className="call-dialog-layout"><div className="call-console">
     {active ? <div className="call-party"><Avatar name={props.name ?? (props.incoming || props.number)} large /><h3>{props.name ?? formatPhone(props.incoming || props.number)}</h3><p role="status">{props.status}</p></div> : <><p className="modal-description">Depuis votre ligne {formatPhone(props.line)}</p><label className="field-label">Numéro de téléphone<div className="dial-input"><input autoFocus inputMode="tel" value={props.number} onChange={(event) => props.onNumber(event.target.value)} placeholder="+33 6 12 34 56 78" /><button className="icon-button" type="button" aria-label="Effacer le dernier chiffre" onClick={() => props.onNumber(props.number.slice(0, -1))}><Backspace size={20} /></button></div></label>{props.name && <p className="dial-contact">{props.name}</p>}</>}
-    {!props.incoming && <div className="dial-pad" role="group" aria-label="Clavier téléphonique">{['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'].map((digit, index) => <button key={digit} type="button" disabled={active && props.state !== "active"} aria-label={props.state === "active" ? `Envoyer la tonalité ${digit}` : `Ajouter ${digit} au numéro`} onClick={() => props.state === "active" ? props.onDigit(digit) : props.onNumber(props.number + digit)}>{digit}<small>{['', 'ABC', 'DEF', 'GHI', 'JKL', 'MNO', 'PQRS', 'TUV', 'WXYZ', '', '+', ''][index]}</small></button>)}</div>}
+    {!props.incoming && (!props.transcript || keypadOpen) && <div className="dial-pad" role="group" aria-label="Clavier téléphonique">{['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'].map((digit, index) => <button key={digit} type="button" disabled={active && props.state !== "active"} aria-label={props.state === "active" ? `Envoyer la tonalité ${digit}` : `Ajouter ${digit} au numéro`} onClick={() => props.state === "active" ? props.onDigit(digit) : props.onNumber(props.number + digit)}>{digit}<small>{['', 'ABC', 'DEF', 'GHI', 'JKL', 'MNO', 'PQRS', 'TUV', 'WXYZ', '', '+', ''][index]}</small></button>)}</div>}
     {props.incoming ? <div className="call-controls"><button className="button button-danger" onClick={props.onReject}><PhoneX size={19} />Refuser</button><button className="button button-primary" onClick={props.onAccept}><Phone size={19} />Répondre</button></div> : active ? <div className="call-controls">{props.state === "active" && <button className="button button-secondary" aria-pressed={props.muted} onClick={props.onMute}>{props.muted ? <MicrophoneSlash size={19} /> : <Microphone size={19} />}{props.muted ? "Rétablir" : "Couper le micro"}</button>}<button className="button button-danger" onClick={props.onHangup}><PhoneDisconnect size={19} />{props.state === "active" ? "Raccrocher" : "Annuler l’appel"}</button></div> : <button className="button button-primary button-wide" disabled={!props.enabled || props.busy || !normalizePhoneNumber(props.number)} onClick={props.onCall}><Phone size={19} />{props.busy ? "Préparation…" : "Appeler"}</button>}
+    {props.transcript && <button className="text-button" aria-expanded={keypadOpen} onClick={() => setKeypadOpen(!keypadOpen)}>{keypadOpen ? "Masquer le clavier" : "Ouvrir le clavier"}</button>}
     {!active && <p className="dial-status" role="status">{props.status}</p>}
+    </div>{props.transcript}</div>
   </Modal>;
 }

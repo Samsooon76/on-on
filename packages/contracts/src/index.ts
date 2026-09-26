@@ -130,3 +130,5 @@ export * from "./call-center.js";
 export type { StatisticsCall, StatisticsSnapshot } from "./statistics.js";
 export * from "./services.js";
 export * from "./mcp.js";
+export * from "./webhooks.js";
+export * from "./transcription.js";

@@ -159,11 +159,11 @@ export class TwilioNativeVoiceClient implements NativeVoiceClient {
     if (this.activeCall?.getSid() === call.getSid()) return;
     this.activeCall = call;
     const state = call.getState();
-    if (state === Call.State.Connected) this.emit({ type: "active" });
+    if (state === Call.State.Connected) this.emit({ type: "active", ...(call.getSid() ? { providerCallSid: call.getSid()! } : {}) });
     else if (state === Call.State.Reconnecting) this.emit({ type: "reconnecting" });
     else if (state === Call.State.Connecting) this.emit({ type: "connecting" });
     else this.emit({ type: "ringing" });
-    call.on(Call.Event.Connected, () => this.emit({ type: "active" }));
+    call.on(Call.Event.Connected, () => this.emit({ type: "active", ...(call.getSid() ? { providerCallSid: call.getSid()! } : {}) }));
     call.on(Call.Event.Ringing, () => this.emit({ type: "ringing" }));
     call.on(Call.Event.Reconnecting, () => this.emit({ type: "reconnecting" }));
     call.on(Call.Event.Reconnected, () => this.emit({ type: "reconnected" }));

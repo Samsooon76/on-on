@@ -1,5 +1,7 @@
 # API HTTP v1
 
+Pour les intégrateurs : [guide API clients](api-clients.md), [webhooks clients](webhooks.md), documentation publique `/docs` et contrat OpenAPI 3.1 `/openapi.json`.
+
 Politique d'évolution et versions minimales : [compatibilité API et clients](api-compatibility.md).
 
 L'API écoute sur le port configuré par `API_PORT` (4100 par défaut). Les routes `/v1/*` exigent `Authorization: Bearer <Supabase access token>`. Les erreurs ont une forme stable `{ code, message, requestId }`. Les routes utilisateur sont sous `/v1`; les webhooks fournisseur sous `/webhooks/twilio`.

@@ -4,7 +4,7 @@ export type VoiceEvent =
   | { type: "incoming"; from: string }
   | { type: "connecting" }
   | { type: "ringing" }
-  | { type: "active" }
+  | { type: "active"; providerCallSid?: string }
   | { type: "reconnecting" }
   | { type: "reconnected" }
   | { type: "ended"; reason: "completed" | "missed" | "rejected" | "canceled" | "failed" }

@@ -14,5 +14,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@onoff/contracts": "workspace:*"
   }
 }

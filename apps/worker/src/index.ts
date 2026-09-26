@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import twilio from "twilio";
 import type { Database } from "@onoff/contracts";
 import { loadConfig } from "@onoff/api/config";
+import { deliverCustomerWebhookBatch, webhookStore } from "@onoff/api/customer-webhooks";
 
 const config = loadConfig();
 const supabaseUrl = new URL(config.SUPABASE_URL);
@@ -236,4 +237,25 @@ function requestShutdown(signal: NodeJS.Signals): void {
 
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
-await run();
+async function runCustomerWebhooks(): Promise<void> {
+  if (!config.WEBHOOK_ENCRYPTION_KEY) return;
+  const store = webhookStore(supabase);
+  let lastMaintenance = 0;
+  while (!stopping) {
+    try {
+      const presence = await store.rpc("refresh_webhook_reachability", {});
+      if (presence.error) throw new Error("webhook_presence_failed");
+      if (Date.now() - lastMaintenance > 3_600_000) {
+        const cleanup = await store.rpc("prune_customer_webhooks", {});
+        if (cleanup.error) throw new Error("webhook_cleanup_failed");
+        lastMaintenance = Date.now();
+      }
+      const delivered = await deliverCustomerWebhookBatch(store, config.WEBHOOK_ENCRYPTION_KEY);
+      if (delivered) console.info(JSON.stringify({ level: "info", workerId, task: "customer_webhooks", attempted: delivered }));
+    } catch {
+      console.error(JSON.stringify({ level: "error", workerId, task: "customer_webhooks", code: "delivery_cycle_failed" }));
+    }
+    await sleep(5000);
+  }
+}
+await Promise.all([run(), runCustomerWebhooks()]);

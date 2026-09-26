@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowUp, ChatCircle, Check, Checks, Info, MagnifyingGlass, Phone, PhoneIncoming, PhoneOutgoing, PhoneX, Plus, UserPlus, X } from "@phosphor-icons/react";
+import { TextAlignLeft, ArrowLeft, ArrowUp, ChatCircle, Check, Checks, Info, MagnifyingGlass, Phone, PhoneIncoming, PhoneOutgoing, PhoneX, Plus, UserPlus, X } from "@phosphor-icons/react";
 import { Avatar, EmptyState } from "./ui";
 import { buildTimeline, callLabel, formatDuration, formatPhone, isMissedCall, messageStatus, phoneKey, type Contact, type InboxConversation, type MessageRecord } from "./conversation-model";
 
@@ -30,6 +30,7 @@ type Props = {
   onBody(body: string): void;
   onSend(event: React.FormEvent): void;
   onCall(number: string): void;
+  onTranscript(callId: string): void;
   onAddContact(number: string): void;
   onRetry(): void;
 };
@@ -114,7 +115,7 @@ export function Conversations(props: Props) {
             </div> : <div className={`call-event${isMissedCall(event.call) ? " missed" : ""}`}>
               <span className="call-event-icon">{isMissedCall(event.call) ? <PhoneX /> : event.call.direction === "inbound" ? <PhoneIncoming /> : <PhoneOutgoing />}</span>
               <div><b>{callLabel(event.call)}</b><p>{event.call.duration_seconds ? formatDuration(event.call.duration_seconds) : ['answered', 'ringing', 'initiated'].includes(event.call.status) ? "En cours" : event.call.status === "completed" ? "Terminé" : "Non abouti"}<span>·</span><time dateTime={event.createdAt}>{timeLabel(event.createdAt)}</time></p></div>
-              <button className="icon-button" disabled={!props.canCall} aria-label={`Rappeler ${name}`} title="Rappeler" onClick={() => props.onCall(props.number)}><Phone size={18} /></button>
+              <button className="icon-button" aria-label="Voir la transcription de cet appel" title="Transcription" onClick={() => props.onTranscript(event.call.id)}><TextAlignLeft size={18} /></button><button className="icon-button" disabled={!props.canCall} aria-label={`Rappeler ${name}`} title="Rappeler" onClick={() => props.onCall(props.number)}><Phone size={18} /></button>
             </div>}
           </Fragment>)}
           {!visibleEvents.length && props.messagesState === "ready" && <EmptyState icon={eventFilter === "call" ? <Phone size={25} /> : <ChatCircle size={25} />} title={eventFilter === "call" ? "Aucun appel dans cet historique" : eventFilter === "message" ? "Pas encore de SMS" : "Le début de votre conversation"}><p>{eventFilter === "call" ? "Les appels avec cet interlocuteur apparaîtront ici." : `Écrivez à ${name} pour commencer l’échange.`}</p></EmptyState>}

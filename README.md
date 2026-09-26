@@ -22,6 +22,11 @@ Les appels et SMS sont désactivés tant que les valeurs Twilio vérifiées de l
 
 ## Documentation
 
+- [API clients : démarrage, authentification et exemples](docs/api-clients.md) — référence publique sur `/docs`, export `/openapi.json`.
+- [Webhooks clients : événements, signatures et configuration](docs/webhooks.md)
+
+- [Powerdialer : import CSV, campagnes et relances](docs/ux-powerdialer.md)
+
 - [Connecteur MCP utilisateurs : fonctionnalités et activation](docs/runbooks/mcp-setup.md)
 
 - [Administration, rôles, permissions et IVR](docs/administration.md)

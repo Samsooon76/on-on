@@ -43,3 +43,18 @@ test("an already-open SDK call is immediately shown as connected", async () => {
   const { client, events } = setup(async () => sdkCall("open")); await client.startCall(target);
   assert.deepEqual(events.map(e => e.type), ["connecting", "active"]);
 });
+
+test("connected events include the provider SID when the SDK supplies it", async () => {
+  const sid = `CA${"1".repeat(32)}`;
+  for (const status of ["connecting", "open"]) {
+    const call = sdkCall(status);
+    if (status === "open") call.parameters = { CallSid: sid };
+    const { client, events } = setup(async () => call);
+    await client.startCall(target);
+    if (status === "connecting") {
+      call.parameters = { CallSid: sid };
+      call.emit("accept");
+    }
+    assert.deepEqual(events.at(-1), { type: "active", providerCallSid: sid });
+  }
+});
