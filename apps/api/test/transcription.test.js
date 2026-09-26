@@ -241,3 +241,19 @@ test('stop racing the recording creation is honored after its provider SID arriv
   assert.equal(state.rows[0].recording_status, 'processing');
   assert.equal(state.starts.length, 0);
 });
+
+test('a late callback after an uncertain recording start honors an earlier stop', async t => {
+  const { app, state, request } = setup(t, true);
+  state.recordingFails = true;
+  await request('POST');
+  assert.equal(state.rows[0].recording_status, 'failed');
+  assert.equal((await request('POST', `/v1/calls/${callId}/transcription/stop`)).statusCode, 200);
+  assert.equal(state.rows[0].recording_stop_requested, true);
+  assert.equal((await recordingCallback(app, state, { RecordingStatus: 'in-progress' })).statusCode, 204);
+  assert.equal(state.recordingStops.length, 1);
+  assert.equal(state.rows[0].recording_status, 'processing');
+  assert.equal((await recordingCallback(app, state)).statusCode, 204);
+  assert.equal((await recordingCallback(app, state, { RecordingStatus: 'in-progress' })).statusCode, 204);
+  assert.equal(state.rows[0].recording_status, 'ready');
+  assert.equal(state.recordingStops.length, 1);
+});

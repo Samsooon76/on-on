@@ -16,6 +16,7 @@ export type RecordingFields = {
 };
 type RecordingRow = RecordingFields & { id: string; call_id: string; provider_call_sid: string };
 const pending = ["starting", "recording", "processing"];
+const stoppable = ["starting", "recording", "failed"];
 const fail = (message: string, statusCode = 503): never => { throw Object.assign(new Error(message), { statusCode }); };
 function checked<T>(result: { data: T; error: unknown }): T { if (result.error) fail("L’enregistrement est momentanément indisponible."); return result.data; }
 export function publicRecording(row: RecordingFields): CallRecording | null {
@@ -49,12 +50,12 @@ export function registerCallRecording(app: FastifyInstance, config: AppConfig, d
     }
   }
   async function stop(row: RecordingRow) {
-    if (!db || !provider || !row.recording_status || !["starting", "recording"].includes(row.recording_status)) return;
-    await patch(row.id, { recording_stop_requested: true }, ["starting", "recording"]);
+    if (!db || !provider || !row.recording_status || !stoppable.includes(row.recording_status)) return;
+    await patch(row.id, { recording_stop_requested: true }, stoppable);
     if (!row.recording_sid) return; // start response / signed callback will complete the stop.
     try {
       await provider.calls(row.provider_call_sid).recordings(row.recording_sid).update({ status: "stopped" });
-      await patch(row.id, { recording_status: "processing" }, ["starting", "recording"]);
+      await patch(row.id, { recording_status: "processing", recording_error: null }, stoppable);
     } catch { fail("L’arrêt de l’enregistrement n’a pas été confirmé. Réessayez ou terminez l’appel."); }
   }
   async function refresh<T extends RecordingRow>(row: T): Promise<T> {
@@ -88,7 +89,7 @@ export function registerCallRecording(app: FastifyInstance, config: AppConfig, d
     const duration = /^\d+$/.test(body.RecordingDuration ?? "") ? Number(body.RecordingDuration) : null;
     if (duration !== null && !Number.isSafeInteger(duration)) return reply.code(400).send();
     await patch(row.id, { recording_sid: body.RecordingSid!, recording_status: state(body.RecordingStatus!), recording_duration_seconds: duration,
-      recording_error: body.RecordingStatus === "absent" ? "Aucun audio exploitable n’a été reçu." : null }, body.RecordingStatus === "in-progress" ? ["starting"] : [...pending, "failed"]);
+      recording_error: body.RecordingStatus === "absent" ? "Aucun audio exploitable n’a été reçu." : null }, body.RecordingStatus === "in-progress" ? ["starting", "failed"] : [...pending, "failed"]);
     if (body.RecordingStatus === "in-progress" && row.recording_stop_requested && ["starting", "recording", "failed"].includes(row.recording_status)) await stop({ ...row, recording_sid: body.RecordingSid!, recording_status: "recording" });
     return reply.code(204).send();
   });
