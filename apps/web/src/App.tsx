@@ -1,10 +1,11 @@
 import { createClient, type Session } from "@supabase/supabase-js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NumberPurchase } from "./NumberPurchase";
 import webPackage from "../package.json";
-import { ArrowClockwise, ArrowRight, ChatCircle, CheckCircle, GearSix, Microphone, Monitor, Phone, Plus, SignOut, DeviceMobile, Users, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowRight, Lightning, ChatCircle, CheckCircle, GearSix, Microphone, Monitor, Phone, Plus, SignOut, DeviceMobile, Users, WarningCircle, X } from "@phosphor-icons/react";
 import { Conversations } from "./Conversations";
 import { Contacts } from "./Contacts";
+import { PowerDialer } from "./PowerDialer";
 import { CallDialog, NewConversation } from "./ConversationDialogs";
 import { Avatar, EmptyState, Modal } from "./ui";
 import { buildInbox, formatPhone, phoneKey, type Contact, type CallRecord, type Conversation, type MessageRecord } from "./conversation-model";
@@ -73,7 +74,7 @@ export default function App() {
   const historyScope = useRef("");
   const historyExpanded = useRef(false);
   const smsSubmitting = useRef(false);
-  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "settings">("conversations");
+  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings">("conversations");
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
@@ -82,6 +83,15 @@ export default function App() {
   const [messageBody, setMessageBody] = useState("");
   const [pendingSmsAttempt, setPendingSmsAttempt] = useState<{ signature: string; key: string } | null>(null);
   const [smsRecoveryState, setSmsRecoveryState] = useState<"checking" | "ready" | "unavailable">("checking");
+  const [powerDialerLocked, setPowerDialerLocked] = useState(false);
+  const callSubmitting = useRef(false);
+  const powerDialerOwnsCall = useRef(false);
+  const voiceActivity = useRef(false);
+  const dialerListeners = useRef(new Set<(event: VoiceEvent) => void>());
+  const subscribePowerDialer = useCallback((listener: (event: VoiceEvent) => void) => {
+    dialerListeners.current.add(listener);
+    return () => { dialerListeners.current.delete(listener); };
+  }, []);
   const [voiceStatus, setVoiceStatus] = useState("Ligne inactive");
   const [voiceTabOwner, setVoiceTabOwner] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "connecting" | "ringing" | "active">("idle");
@@ -119,6 +129,8 @@ export default function App() {
         voiceOwnershipRelease.current = null;
         setVoiceTabOwner(false);
         setVoiceState("idle");
+        voiceActivity.current = false;
+        powerDialerOwnsCall.current = false;
         setIncomingFrom("");
         void setVoiceRegistrationRef.current(false);
         voiceUnsubscribe.current?.();
@@ -193,6 +205,7 @@ export default function App() {
   }
 
   function openCall(number = ""): void {
+    if (powerDialerLocked || callSubmitting.current) { setActiveTab("powerdialer"); return; }
     if (voiceState === "idle" && !incomingFrom) setDestination(number);
     setDialerOpen(true);
   }
@@ -278,8 +291,8 @@ export default function App() {
       setNotice("Vérifiez d’abord le résultat du SMS avant de changer d’organisation.");
       return;
     }
-    if (voiceState !== "idle") {
-      setNotice("Terminez l’appel avant de changer d’organisation.");
+    if (voiceState !== "idle" || powerDialerLocked || callSubmitting.current) {
+      setNotice("Mettez le powerdialer en pause et terminez l’appel avant de changer d’organisation.");
       return;
     }
     if (organizationId === selectedOrg) return;
@@ -310,8 +323,8 @@ export default function App() {
       setNotice("Vérifiez d’abord le résultat du SMS avant de changer de ligne.");
       return;
     }
-    if (voiceState !== "idle") {
-      setNotice("Terminez l’appel avant de changer de ligne.");
+    if (voiceState !== "idle" || powerDialerLocked || callSubmitting.current) {
+      setNotice("Mettez le powerdialer en pause et terminez l’appel avant de changer de ligne.");
       return;
     }
     if (lineId === selectedLineId) return;
@@ -928,6 +941,12 @@ export default function App() {
   }
 
   function handleVoiceEvent(event: VoiceEvent) {
+    if (["incoming", "connecting", "ringing", "active"].includes(event.type)) voiceActivity.current = true;
+    if (event.type === "ended") voiceActivity.current = false;
+    if (powerDialerOwnsCall.current || ["incoming", "unavailable", "reconnecting"].includes(event.type)) {
+      for (const listener of dialerListeners.current) listener(event);
+    }
+    if (event.type === "ended") powerDialerOwnsCall.current = false;
     switch (event.type) {
       case "ready": void setVoiceRegistration(true); setVoiceStatus("Prête à appeler"); break;
       case "unavailable": void setVoiceRegistration(false); setVoiceStatus(event.message); setNotice(event.message); break;
@@ -971,23 +990,32 @@ export default function App() {
     }
   }
 
-  async function startVoiceCall() {
+  async function startVoiceCall(number = destination, shouldContinue: () => boolean = () => true, fromPowerDialer = false): Promise<string> {
+    if (callSubmitting.current || voiceActivity.current || voiceState !== "idle" || incomingFrom) throw new Error("Un appel est déjà en cours.");
     if (!voiceTabOwner) {
-      setNotice("Les appels sont actifs dans un autre onglet. Fermez-le pour reprendre ici.");
-      return;
+      throw new Error("Les appels sont actifs dans un autre onglet. Fermez-le pour reprendre ici.");
     }
-    if (!selectedOrg || !activeLine || !activeAssignment?.can_voice || !activeLine.voice_enabled) return;
-    const normalizedDestination = normalizePhoneNumber(destination);
+    if (!networkOnline || !selectedOrg || !activeLine || !activeAssignment?.can_voice || !activeLine.voice_enabled) throw new Error("La ligne vocale n’est pas disponible.");
+    const normalizedDestination = normalizePhoneNumber(number);
     if (!normalizedDestination) {
-      setNotice("Saisissez un numéro international ou un numéro français à 10 chiffres.");
-      return;
+      throw new Error("Saisissez un numéro international ou un numéro français à 10 chiffres.");
     }
+    callSubmitting.current = true;
     setBusy(true);
     setNotice("");
     let unusedIntentId: string | null = null;
+    let transportStarted = false;
+    const userId = currentUserId.current;
+    const assertCallStillAllowed = () => {
+      if (!shouldContinue() || !navigator.onLine) throw new Error("Préparation interrompue. Reprenez la session pour appeler.");
+      if (voiceActivity.current) throw new Error("Un autre appel est arrivé pendant la préparation.");
+      if (currentUserId.current !== userId || scopeRef.current.org !== selectedOrg || scopeRef.current.line !== activeLine.id) throw new Error("La ligne a changé pendant la préparation.");
+    };
     try {
       await requestMicrophoneAccess();
+      assertCallStillAllowed();
       await ensureVoiceClient(selectedOrg, activeLine.id);
+      assertCallStillAllowed();
       const currentDeviceId = deviceRef.current?.organizationId === selectedOrg ? deviceRef.current.id : "";
       if (!currentDeviceId) throw new Error("Cet appareil n’est pas enregistré sur cette organisation.");
       const intent = await api<{ id: string }>("/v1/call-intents", {
@@ -998,17 +1026,27 @@ export default function App() {
       unusedIntentId = intent.id;
       const client = voiceClient.current;
       if (!client) throw new Error("La ligne vocale n’a pas pu s’enregistrer.");
+      assertCallStillAllowed();
+      powerDialerOwnsCall.current = fromPowerDialer;
+      transportStarted = true;
       await client.startCall({ destination: normalizedDestination, intentId: intent.id });
       unusedIntentId = null;
       setDestination(normalizedDestination);
+      return intent.id;
     } catch (error) {
       if (unusedIntentId) {
         try { await api(`/v1/call-intents/${unusedIntentId}/cancel`, { method: "POST" }); } catch { /* The reservation still expires through the server's bounded cleanup. */ }
       }
-      setVoiceState("idle");
-      setVoiceStatus("Appel impossible");
+      powerDialerOwnsCall.current = false;
+      if (transportStarted || !voiceActivity.current) {
+        voiceActivity.current = false;
+        setVoiceState("idle");
+        setVoiceStatus("Appel impossible");
+      }
       setNotice(error instanceof Error ? error.message : "L’appel n’a pas pu démarrer.");
+      throw error;
     } finally {
+      callSubmitting.current = false;
       setBusy(false);
     }
   }
@@ -1035,20 +1073,21 @@ export default function App() {
   const activeDevices = devices.filter((device) => device.organization_id === selectedOrg);
   const unreadCount = conversations.filter((conversation) => conversation.unread).length;
   const duplicateContact = normalizePhoneNumber(contactPhone) ? contacts.find((contact) => contact.id !== editingContact?.id && contact.contact_phones.some((phone) => phone.phone_number === normalizePhoneNumber(contactPhone))) : null;
-  const sectionTitle = activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
+  const sectionTitle = activeTab === "powerdialer" ? "Powerdialer" : activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
   const lineOptions = lines.filter((item) => item.lines);
 
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setActiveTab("conversations"); }} aria-label="Onoff, conversations"><span className="brand-mark">o</span><span>onoff</span></a>
-      <div className="workspace-switch"><span className="workspace-initial">{organizationName.slice(0, 1)}</span>{organizations.length > 1 ? <select aria-label="Organisation active" value={selectedOrg} disabled={voiceState !== "idle" || conversationLocked} onChange={(event) => selectOrganization(event.target.value)}>{organizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations?.name ?? "Mon espace"}</option>)}</select> : <span>{organizationName}</span>}</div>
+      <div className="workspace-switch"><span className="workspace-initial">{organizationName.slice(0, 1)}</span>{organizations.length > 1 ? <select aria-label="Organisation active" value={selectedOrg} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked} onChange={(event) => selectOrganization(event.target.value)}>{organizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations?.name ?? "Mon espace"}</option>)}</select> : <span>{organizationName}</span>}</div>
       <nav className="main-nav" aria-label="Navigation principale">
         <button className={`nav-item${activeTab === "conversations" ? " selected" : ""}`} aria-current={activeTab === "conversations" ? "page" : undefined} onClick={() => setActiveTab("conversations")}><ChatCircle size={20} /><span>Conversations</span>{unreadCount > 0 && <span className="nav-count">{unreadCount}</span>}</button>
         <button className={`nav-item${activeTab === "contacts" ? " selected" : ""}`} aria-current={activeTab === "contacts" ? "page" : undefined} onClick={() => setActiveTab("contacts")}><Users size={20} /><span>Contacts</span></button>
+        <button className={`nav-item${activeTab === "powerdialer" ? " selected" : ""}`} aria-current={activeTab === "powerdialer" ? "page" : undefined} onClick={() => setActiveTab("powerdialer")}><Lightning size={20} /><span>Powerdialer</span></button>
         <button className={`nav-item mobile-settings${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
       </nav>
       <div className="sidebar-bottom">
-        <div className="sidebar-line"><span className="side-label">VOTRE LIGNE</span>{lineOptions.length > 1 ? <select aria-label="Ligne active" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || conversationLocked} onChange={(event) => selectLine(event.target.value)}>{lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>)}</select> : <strong>{activeLine ? formatPhone(activeLine.phone_number) : "Aucune ligne attribuée"}</strong>}<span className="line-availability"><i className={voiceTabOwner && voiceRegisteredRef.current ? "available" : ""} />{voiceTabOwner && voiceRegisteredRef.current ? "Disponible pour les appels" : activeLine ? "Appels en attente" : "Ajoutez une ligne pour commencer"}</span>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={14} />Ajouter une ligne</button>}</div>
+        <div className="sidebar-line"><span className="side-label">VOTRE LIGNE</span>{lineOptions.length > 1 ? <select aria-label="Ligne active" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked} onChange={(event) => selectLine(event.target.value)}>{lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>)}</select> : <strong>{activeLine ? formatPhone(activeLine.phone_number) : "Aucune ligne attribuée"}</strong>}<span className="line-availability"><i className={voiceTabOwner && voiceRegisteredRef.current ? "available" : ""} />{voiceTabOwner && voiceRegisteredRef.current ? "Disponible pour les appels" : activeLine ? "Appels en attente" : "Ajoutez une ligne pour commencer"}</span>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={14} />Ajouter une ligne</button>}</div>
         <button className={`nav-item${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
         <button className="profile-button" onClick={() => setActiveTab("settings")}><Avatar name={session.user.email ?? "Moi"} /><span><b>{session.user.email?.split("@")[0] ?? "Mon compte"}</b><small>{canPurchaseNumber ? "Administrateur" : "Membre de l’équipe"}</small></span></button>
       </div>
@@ -1056,17 +1095,26 @@ export default function App() {
 
     <main className="main-area">
       <header className="topbar"><div className="topbar-title"><h1>{sectionTitle}</h1><span>{organizationName}</span></div><div className="topbar-actions"><button className="icon-button" aria-label="Actualiser l’espace" title="Actualiser" disabled={workspaceState === "loading"} onClick={() => void retryWorkspace()}><ArrowClockwise size={18} /></button><button className="button button-secondary" onClick={() => openCall()}><Phone size={17} /><span>{voiceState !== "idle" || incomingFrom ? "Appel en cours" : "Nouvel appel"}</span></button></div></header>
-      <div className="mobile-line-switch"><label>Votre ligne<select aria-label="Ligne active sur mobile" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || conversationLocked || !lineOptions.length} onChange={(event) => selectLine(event.target.value)}>{lineOptions.length ? lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>) : <option value="">Aucune ligne attribuée</option>}</select></label></div>
+      <div className="mobile-line-switch"><label>Votre ligne<select aria-label="Ligne active sur mobile" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked || !lineOptions.length} onChange={(event) => selectLine(event.target.value)}>{lineOptions.length ? lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>) : <option value="">Aucune ligne attribuée</option>}</select></label></div>
       {!networkOnline && <div className="app-banner warning" role="status"><WarningCircle size={18} /><span>Vous êtes hors ligne. Reconnectez-vous pour retrouver vos échanges.</span></div>}
       {notice && <div className="app-banner" role="status"><ChatCircle size={18} /><span>{notice}</span><button className="icon-button" aria-label="Fermer le message" onClick={() => setNotice("")}><X size={16} /></button></div>}
       {smsRecoveryState === "unavailable" && <div className="app-banner warning" role="alert"><WarningCircle size={18} /><span>Impossible de vérifier les SMS précédents.</span><button className="text-button" onClick={() => void retrySmsRecovery()}>Réessayer</button></div>}
       {!activeLine && workspaceState === "ready" && <div className="app-banner"><Phone size={18} /><span>{canPurchaseNumber ? "Ajoutez votre première ligne pour commencer à échanger." : "Demandez à votre administrateur de vous attribuer une ligne."}</span>{canPurchaseNumber && <button className="text-button" onClick={() => setNumberPurchaseOpen(true)}>Ajouter une ligne</button>}</div>}
 
-      {activeTab === "conversations" ? <Conversations
+      <PowerDialer key={`${session.user.id}:${selectedOrg}:${activeLine?.id ?? ""}`} visible={activeTab === "powerdialer"}
+        scope={{ userId: session.user.id, organizationId: selectedOrg, lineId: activeLine?.id ?? "" }}
+        lineNumber={activeLine?.phone_number ?? ""} enabled={canCall && networkOnline}
+        blocked={Boolean(incomingFrom) || dialerOpen || numberPurchaseOpen || newConversationOpen || contactEditorOpen}
+        voiceStatus={voiceStatus} voiceState={voiceState} muted={muted} calls={calls}
+        loadContacts={(query, cursor) => api(`/v1/organizations/${selectedOrg}/contacts?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`)}
+        onStart={(number, shouldContinue) => startVoiceCall(number, shouldContinue, true)} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigits={(digits) => voiceClient.current?.sendDigits(digits)}
+        subscribe={subscribePowerDialer} onLock={setPowerDialerLocked}
+      />
+      {activeTab === "powerdialer" ? null : activeTab === "conversations" ? <Conversations
         inbox={inbox} contacts={contacts} number={messageDestination} lineNumber={activeLine?.phone_number ?? ""}
         messages={conversationMessages} body={messageBody} dataState={workspaceState} messagesState={messagesState}
         busy={busy || smsRecoveryState !== "ready"} locked={conversationLocked} pending={Boolean(pendingSmsAttempt)}
-        canSms={canSms} canCall={canCall && voiceState === "idle"} segments={smsSegmentInfo.segments}
+        canSms={canSms} canCall={canCall && !powerDialerLocked && !busy && voiceState === "idle"} segments={smsSegmentInfo.segments}
         hasMore={Boolean(historyCursors.calls || historyCursors.conversations)} hasOlderMessages={Boolean(messagesCursor)} loadingMore={loadingMore}
         onMore={() => void loadMoreHistory()} onOlderMessages={() => void loadOlderMessages()}
         onOpen={openConversation} onNew={() => setNewConversationOpen(true)}
@@ -1074,17 +1122,17 @@ export default function App() {
         onBody={setMessageBody} onSend={sendMessage} onCall={openCall} onAddContact={newContact} onRetry={() => void retryWorkspace()}
       /> : activeTab === "contacts" ? <Contacts contacts={contacts} search={contactSearch} busy={busy || conversationLocked} dataState={workspaceState} onSearch={setContactSearch} onAdd={() => newContact()} onEdit={beginEditContact} onArchive={(contact) => void archiveContact(contact)} onCall={(contact) => openCall(contact.contact_phones[0]?.phone_number)} onMessage={(contact) => openConversation(contact.contact_phones[0]?.phone_number ?? "")} /> : <section className="settings-page">
         <div className="section-intro"><div><h2>Votre espace de travail</h2><p>Votre compte, vos lignes et vos appareils.</p></div></div>
-        <section className="settings-section"><h3>Mon compte</h3><div className="account-row"><Avatar name={session.user.email ?? "Moi"} /><div><b>{session.user.email}</b><p>{organizationName}</p></div><button className="button button-secondary" disabled={Boolean(pendingSmsAttempt) || voiceState !== "idle"} onClick={() => void supabase?.auth.signOut()}><SignOut size={17} />Se déconnecter</button></div></section>
-        <section className="settings-section"><div className="settings-section-heading"><h3>Mes lignes</h3>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={16} />Ajouter une ligne</button>}</div>{lineOptions.map((item) => <div className="settings-line-row" key={item.lines!.id}><Phone size={21} /><div><b>{formatPhone(item.lines!.phone_number)}</b><p>{item.can_voice && item.lines!.voice_enabled ? "Appels activés" : "Appels indisponibles"} · {item.can_sms && item.lines!.sms_enabled ? "SMS activés" : "SMS indisponibles"}</p></div>{item.lines!.id === activeLine?.id ? <span className="selected-line"><CheckCircle size={16} />Sélectionnée</span> : <button className="button button-secondary" disabled={conversationLocked || voiceState !== "idle"} onClick={() => selectLine(item.lines!.id)}>Utiliser cette ligne</button>}</div>)}{!lineOptions.length && <p className="settings-description">Aucune ligne attribuée pour le moment.</p>}</section>
-        <section className="settings-section"><div className="settings-section-heading"><h3>Appareils connectés</h3><span>{activeDevices.filter((device) => device.status === "active").length} actifs</span></div><p className="settings-description">Gérez les appareils autorisés à utiliser votre compte.</p>{activeDevices.map((device) => <div className="device-row" key={device.id}><span className="device-icon">{device.platform === "web" ? <Monitor /> : <DeviceMobile />}</span><div><b>{device.label || device.platform}</b><p>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${new Date(device.last_active_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : ""}</p></div>{device.status === "active" && <button className="text-button danger-text" disabled={busy || voiceState !== "idle"} onClick={() => void revokeDevice(device.id)}>Révoquer</button>}</div>)}{!activeDevices.length && <EmptyState icon={<Monitor size={26} />} title="Aucun appareil enregistré"><p>Votre navigateur sera associé lors de l’activation des appels.</p></EmptyState>}</section>
+        <section className="settings-section"><h3>Mon compte</h3><div className="account-row"><Avatar name={session.user.email ?? "Moi"} /><div><b>{session.user.email}</b><p>{organizationName}</p></div><button className="button button-secondary" disabled={Boolean(pendingSmsAttempt) || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => void supabase?.auth.signOut()}><SignOut size={17} />Se déconnecter</button></div></section>
+        <section className="settings-section"><div className="settings-section-heading"><h3>Mes lignes</h3>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={16} />Ajouter une ligne</button>}</div>{lineOptions.map((item) => <div className="settings-line-row" key={item.lines!.id}><Phone size={21} /><div><b>{formatPhone(item.lines!.phone_number)}</b><p>{item.can_voice && item.lines!.voice_enabled ? "Appels activés" : "Appels indisponibles"} · {item.can_sms && item.lines!.sms_enabled ? "SMS activés" : "SMS indisponibles"}</p></div>{item.lines!.id === activeLine?.id ? <span className="selected-line"><CheckCircle size={16} />Sélectionnée</span> : <button className="button button-secondary" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => selectLine(item.lines!.id)}>Utiliser cette ligne</button>}</div>)}{!lineOptions.length && <p className="settings-description">Aucune ligne attribuée pour le moment.</p>}</section>
+        <section className="settings-section"><div className="settings-section-heading"><h3>Appareils connectés</h3><span>{activeDevices.filter((device) => device.status === "active").length} actifs</span></div><p className="settings-description">Gérez les appareils autorisés à utiliser votre compte.</p>{activeDevices.map((device) => <div className="device-row" key={device.id}><span className="device-icon">{device.platform === "web" ? <Monitor /> : <DeviceMobile />}</span><div><b>{device.label || device.platform}</b><p>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${new Date(device.last_active_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : ""}</p></div>{device.status === "active" && <button className="text-button danger-text" disabled={busy || powerDialerLocked || voiceState !== "idle"} onClick={() => void revokeDevice(device.id)}>Révoquer</button>}</div>)}{!activeDevices.length && <EmptyState icon={<Monitor size={26} />} title="Aucun appareil enregistré"><p>Votre navigateur sera associé lors de l’activation des appels.</p></EmptyState>}</section>
         <section className="settings-section"><h3>État des appels</h3><p className="voice-settings-status"><Microphone size={17} />{voiceStatus}</p><p className="settings-description">Un seul onglet reçoit vos appels à la fois. Si vous le fermez, un autre onglet ouvert prend le relais.</p></section>
         <p className="settings-version">onoff · Version {webPackage.version}</p>
       </section>}
     </main>
 
-    {(voiceState !== "idle" || incomingFrom) && !dialerOpen && <button className="active-call-bar" onClick={() => setDialerOpen(true)}><Phone size={19} /><span>{incomingFrom ? "Appel entrant" : voiceStatus}</span><ArrowRight size={17} /></button>}
+    {(voiceState !== "idle" || incomingFrom) && !dialerOpen && !(powerDialerLocked && activeTab === "powerdialer") && <button className="active-call-bar" onClick={() => powerDialerLocked ? setActiveTab("powerdialer") : setDialerOpen(true)}><Phone size={19} /><span>{incomingFrom ? "Appel entrant" : voiceStatus}</span><ArrowRight size={17} /></button>}
     {newConversationOpen && <NewConversation contacts={contacts} onClose={() => setNewConversationOpen(false)} onOpen={(number) => openConversation(number)} />}
-    {dialerOpen && <CallDialog number={destination} name={destinationContact?.display_name ?? null} line={activeLine?.phone_number ?? "non attribuée"} status={voiceStatus} state={voiceState} incoming={incomingFrom} muted={muted} enabled={canCall} busy={busy} onNumber={setDestination} onClose={() => setDialerOpen(false)} onCall={() => void startVoiceCall()} onAccept={() => voiceClient.current?.acceptCall()} onReject={() => voiceClient.current?.rejectCall()} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigit={(digit) => voiceClient.current?.sendDigits(digit)} />}
+    {dialerOpen && <CallDialog number={destination} name={destinationContact?.display_name ?? null} line={activeLine?.phone_number ?? "non attribuée"} status={voiceStatus} state={voiceState} incoming={incomingFrom} muted={muted} enabled={canCall} busy={busy} onNumber={setDestination} onClose={() => setDialerOpen(false)} onCall={() => void startVoiceCall().catch((error: unknown) => setNotice(error instanceof Error ? error.message : "Appel impossible."))} onAccept={() => voiceClient.current?.acceptCall()} onReject={() => voiceClient.current?.rejectCall()} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigit={(digit) => voiceClient.current?.sendDigits(digit)} />}
     {contactEditorOpen && <Modal title={editingContact ? "Modifier le contact" : "Ajouter un contact"} onClose={() => setContactEditorOpen(false)} busy={busy}><form className="contact-form" onSubmit={createContact}><label className="field-label">Nom du contact<input autoFocus value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Prénom Nom" required maxLength={120} /></label><label className="field-label">Téléphone<input inputMode="tel" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} placeholder="+33 6 12 34 56 78" /></label>{duplicateContact && <p className="inline-warning" role="status">Ce numéro est déjà associé à {duplicateContact.display_name}.</p>}<label className="field-label">Email <span className="optional-label">(facultatif)</span><input type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="nom@entreprise.com" /></label>{contactFormError && <p className="form-error" role="alert">{contactFormError}</p>}<div className="modal-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={() => setContactEditorOpen(false)}>Annuler</button><button className="button button-primary" disabled={busy}>{busy ? "Enregistrement…" : "Enregistrer"}</button></div></form></Modal>}
     {numberPurchaseOpen && selectedOrg && <NumberPurchase key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} email={session.user.email ?? "votre compte"} api={api} onClose={() => setNumberPurchaseOpen(false)} onPurchased={async (lineId) => { await refreshWorkspace(selectedOrg); setSelectedLineId(lineId); setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); setActiveTab("conversations"); setNumberPurchaseOpen(false); setNotice("Votre nouvelle ligne est prête."); setDialerOpen(true); }} />}
   </div>;
