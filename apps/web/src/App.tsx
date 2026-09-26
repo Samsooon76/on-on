@@ -1,27 +1,25 @@
-import { createClient, type Session } from "@supabase/supabase-js";
+import type { Session } from "@supabase/supabase-js";
+import { apiBase, supabase } from "./backend";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Admin } from "./Admin";
+import { Statistics } from "./Statistics";
+import { McpConsent, McpIntegrations } from "./McpIntegrations";
 import { CallCenter, QueuePresence } from "./CallCenter";
 import { NumberPurchase } from "./NumberPurchase";
 import webPackage from "../package.json";
-import { ArrowClockwise, ArrowRight, Headset, ShieldCheck, Lightning, ChatCircle, CheckCircle, GearSix, Microphone, Monitor, Phone, Plus, SignOut, DeviceMobile, Users, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowRight, ChartBar, Headset, ShieldCheck, Lightning, ChatCircle, CheckCircle, GearSix, Microphone, Monitor, Phone, Plus, SignOut, DeviceMobile, Users, WarningCircle, X } from "@phosphor-icons/react";
 import { Conversations } from "./Conversations";
 import { Contacts } from "./Contacts";
 import { PowerDialer } from "./PowerDialer";
 import { CallDialog, NewConversation } from "./ConversationDialogs";
 import { Avatar, EmptyState, Modal } from "./ui";
 import { buildInbox, formatPhone, phoneKey, type Contact, type CallRecord, type Conversation, type MessageRecord } from "./conversation-model";
-import { normalizePhoneNumber } from "@onoff/contracts";
+import { normalizePhoneNumber, type ServiceStatus } from "@onoff/contracts";
+import { useContacts } from "./useContacts";
+import { editedContactPhones } from "./contact-model";
 import { ApiClientError, createApiClient, getSmsSegmentInfo } from "@onoff/api-client";
 import { createVoiceClient, type VoiceEvent } from "@onoff/voice-web";
 import type { VoiceClient } from "@onoff/voice-contract";
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4100";
-const supabase = supabaseUrl && supabaseKey
-  ? createClient(supabaseUrl, supabaseKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
-  : null;
 
 type Organization = { organization_id: string; role: "admin" | "member"; organizations: { id: string; name: string } | null };
 type LineAssignment = { can_voice: boolean; can_sms: boolean; lines: { id: string; phone_number: string; voice_enabled: boolean; sms_enabled: boolean } | null };
@@ -54,7 +52,8 @@ export default function App() {
   const [selectedLineId, setSelectedLineId] = useState("");
   const [numberPurchaseOpen, setNumberPurchaseOpen] = useState(false);
   const [adminRefresh, setAdminRefresh] = useState(0);
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [services, setServices] = useState<ServiceStatus | null>(null);
+  const [voiceRetry, setVoiceRetry] = useState(0);
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
@@ -77,7 +76,7 @@ export default function App() {
   const historyScope = useRef("");
   const historyExpanded = useRef(false);
   const smsSubmitting = useRef(false);
-  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings" | "admin" | "center">("conversations");
+  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings" | "admin" | "center" | "statistics">(() => new URLSearchParams(window.location.search).has("mcpSms") ? "settings" : "conversations");
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
@@ -114,16 +113,18 @@ export default function App() {
   activeTabRef.current = activeTab;
   selectedConversationIdRef.current = selectedConversationId;
   const smsSegmentInfo = getSmsSegmentInfo(messageBody.trim());
-  const normalizedDestination = normalizePhoneNumber(destination);
-  const destinationContact = normalizedDestination
-    ? contacts.find((contact) => contact.contact_phones.some((phone) => phone.phone_number === normalizedDestination)) ?? null
-    : null;
+
 
   useEffect(() => {
     if (!supabase) return;
-    void supabase.auth.getSession().then(({ data }) => {
+    let disposed = false;
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (disposed) return;
+      if (error) setAuthError(error.message);
       setSession(data.session);
       setReady(true);
+    }).catch(() => {
+      if (!disposed) { setReady(true); setAuthError("Impossible de restaurer la session. Reconnectez-vous."); }
     });
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       const nextUserId = nextSession?.user.id ?? "";
@@ -149,7 +150,7 @@ export default function App() {
         setLines([]);
         setSelectedLineId("");
         setNumberPurchaseOpen(false);
-        setContacts([]);
+        setServices(null);
         setDevices([]);
         setCalls([]);
         setConversations([]);
@@ -168,7 +169,7 @@ export default function App() {
       setSession(nextSession);
       if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
     });
-    return () => listener.subscription.unsubscribe();
+    return () => { disposed = true; listener.subscription.unsubscribe(); };
   }, []);
 
   useEffect(() => () => {
@@ -178,7 +179,14 @@ export default function App() {
   }, []);
 
   const authToken = session?.access_token;
-  const apiClient = useMemo(() => createApiClient({ baseUrl: apiBase, getAccessToken: () => authToken }), [authToken]);
+  const tokenRef = useRef(authToken); tokenRef.current = authToken;
+  const apiClient = useMemo(() => createApiClient({ baseUrl: apiBase, getAccessToken: () => tokenRef.current }), []);
+  const directory = useContacts(session && selectedOrg ? `${session.user.id}:${selectedOrg}` : "", contactSearch,
+    (query, cursor, signal) => apiClient.getPage<Contact>(`/v1/organizations/${selectedOrg}/contacts`, { limit: 50, cursor, query: { q: query || undefined }, signal }));
+  const contacts = directory.contacts;
+  const normalizedDestination = normalizePhoneNumber(destination);
+  const destinationContact = normalizedDestination
+    ? contacts.find(contact => contact.contact_phones.some(phone => phone.phone_number === normalizedDestination)) ?? null : null;
   const activeAssignment = useMemo(() => lines.find((item) => item.lines?.id === selectedLineId) ?? lines.find((item) => item.lines) ?? null, [lines, selectedLineId]);
   const activeLine = activeAssignment?.lines ?? null;
   const canPurchaseNumber = organizations.find((item) => item.organization_id === selectedOrg)?.role === "admin";
@@ -187,8 +195,10 @@ export default function App() {
   scopeRef.current = { org: selectedOrg, line: selectedLineId };
   const conversationLocked = Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready";
   const organizationName = organizations.find((item) => item.organization_id === selectedOrg)?.organizations?.name ?? "Mon espace";
-  const canCall = Boolean(voiceTabOwner && activeLine?.voice_enabled && activeAssignment?.can_voice);
-  const canSms = Boolean(activeLine?.sms_enabled && activeAssignment?.can_sms);
+  const canCall = Boolean(networkOnline && services?.voiceEnabled && !services.operationsPaused && voiceTabOwner && voiceRegisteredRef.current && activeLine?.voice_enabled && activeAssignment?.can_voice);
+  const canSms = Boolean(networkOnline && services?.smsEnabled && !services.operationsPaused && activeLine?.sms_enabled && activeAssignment?.can_sms);
+  const canBuy = Boolean(networkOnline && services?.numberPurchaseEnabled);
+  const smsUnavailable = !networkOnline ? "Reconnectez-vous pour envoyer un SMS." : !services ? "Vérification du service SMS…" : services.operationsPaused ? services.pauseMessage ?? "Les envois sont suspendus." : !services.smsEnabled ? "Le service SMS est désactivé dans cet environnement." : !activeLine ? "Aucune ligne attribuée." : "Les SMS ne sont pas autorisés sur cette ligne.";
 
   function openConversation(number: string, id?: string | null): void {
     if (conversationLocked) return;
@@ -221,9 +231,23 @@ export default function App() {
 
   async function retryWorkspace(): Promise<void> {
     setWorkspaceState("loading");
-    setMessageReload((value) => value + 1);
-    try { await refreshWorkspace(); setWorkspaceState("ready"); }
-    catch (error) { setWorkspaceState("error"); setNotice(error instanceof Error ? error.message : "Chargement impossible."); }
+    setMessageReload(value => value + 1);
+    try {
+      const [{ items }, status] = await Promise.all([
+        api<{ items: Organization[] }>("/v1/organizations"), api<ServiceStatus>("/v1/services"),
+      ]);
+      setOrganizations(items); setServices(status);
+      const next = items.some(item => item.organization_id === selectedOrg) ? selectedOrg : items[0]?.organization_id ?? "";
+      if (next !== selectedOrg) {
+        workspaceRequest.current += 1;
+        setLines([]); setSelectedLineId(""); setCalls([]); setConversations([]);
+        setSelectedConversationId(""); setConversationMessages([]); setMessageDestination(""); setMessageBody("");
+        setSelectedOrg(next);
+      }
+      else { await refreshWorkspace(next); await directory.refresh(); }
+      if (smsRecoveryState === "unavailable") await retrySmsRecovery();
+      setWorkspaceState("ready");
+    } catch (error) { setWorkspaceState("error"); setNotice(error instanceof Error ? error.message : "Chargement impossible."); }
   }
 
   async function loadMoreHistory(): Promise<void> {
@@ -259,6 +283,18 @@ export default function App() {
 
   async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     return apiClient.request<T>(path, init);
+  }
+
+  async function refreshOpenMessages(): Promise<void> {
+    const id = selectedConversationIdRef.current;
+    const org = scopeRef.current.org;
+    if (!id || activeTabRef.current !== "conversations" || document.visibilityState !== "visible") return;
+    const { items } = await api<{ items: MessageRecord[] }>(`/v1/conversations/${id}/messages?limit=50`);
+    if (id !== selectedConversationIdRef.current || org !== scopeRef.current.org) return;
+    setConversationMessages(current => [...new Map([...current, ...items].map(item => [item.id, item])).values()]);
+    if (activeTabRef.current !== "conversations" || document.visibilityState !== "visible") return;
+    await api(`/v1/conversations/${id}/read`, { method: "PUT", body: JSON.stringify({ lastReadMessageId: items.at(-1)?.id ?? null }) });
+    if (id === selectedConversationIdRef.current && org === scopeRef.current.org) setConversations(current => current.map(conversation => conversation.id === id ? { ...conversation, unread: false } : conversation));
   }
 
   async function reportVoiceDiagnostic(event: VoiceDiagnosticEvent, durationMs?: number): Promise<void> {
@@ -305,7 +341,6 @@ export default function App() {
     drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody;
     setLines([]);
     setSelectedLineId("");
-    setContacts([]);
     setDevices([]);
     setCalls([]);
     setConversations([]);
@@ -419,14 +454,12 @@ export default function App() {
   async function refreshWorkspace(orgId = selectedOrg) {
     if (!orgId) return;
     const requestVersion = ++workspaceRequest.current;
-    const [lineResponse, contactResponse, deviceResponse] = await Promise.all([
+    const [lineResponse, deviceResponse] = await Promise.all([
       api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`),
-      api<{ items: Contact[] }>(`/v1/organizations/${orgId}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`),
       api<{ items: DeviceRecord[] }>("/v1/devices"),
     ]);
     if (requestVersion !== workspaceRequest.current) return;
     setLines(lineResponse.items);
-    setContacts(contactResponse.items);
     setDevices(deviceResponse.items);
     const assignment = lineResponse.items.find((item) => item.lines?.id === selectedLineId) ?? lineResponse.items.find((item) => item.lines);
     const line = assignment?.lines;
@@ -490,7 +523,7 @@ export default function App() {
       setPendingSmsAttempt(null);
       setOrganizations([]);
       setLines([]);
-      setContacts([]);
+      setServices(null);
       setCalls([]);
       setConversations([]);
       setDevices([]);
@@ -505,10 +538,11 @@ export default function App() {
     let disposed = false;
     setWorkspaceState("loading");
     setSmsRecoveryState("checking");
-    void api<{ items: Organization[] }>("/v1/organizations")
-      .then(async ({ items }) => {
+    void Promise.all([api<{ items: Organization[] }>("/v1/organizations"), api<ServiceStatus>("/v1/services")])
+      .then(async ([{ items }, status]) => {
         if (disposed) return;
         setOrganizations(items);
+        setServices(status);
         const next = selectedOrg && items.some((item) => item.organization_id === selectedOrg)
           ? selectedOrg
           : items[0]?.organization_id ?? "";
@@ -540,16 +574,6 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrg]);
 
-  useEffect(() => {
-    if (!selectedOrg || !authToken) return;
-    const timer = window.setTimeout(() => {
-      void api<{ items: Contact[] }>(`/v1/organizations/${selectedOrg}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`)
-        .then(({ items }) => setContacts(items))
-        .catch((error: Error) => setNotice(error.message));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrg, authToken, contactSearch]);
 
   useEffect(() => {
     if (!selectedOrg || !selectedLineId || !authToken) return;
@@ -585,11 +609,14 @@ export default function App() {
         setConversationMessages(items);
         setMessagesCursor(nextCursor);
         setMessagesState("ready");
-        await api(`/v1/conversations/${selectedConversationId}/read`, {
-          method: "PUT",
-          body: JSON.stringify({ lastReadMessageId: items.at(-1)?.id ?? null }),
-        });
-        if (!disposed) setConversations((current) => current.map((conversation) => conversation.id === selectedConversationId ? { ...conversation, unread: false } : conversation));
+        if (document.visibilityState === "visible") {
+          try {
+            await api(`/v1/conversations/${selectedConversationId}/read`, {
+              method: "PUT", body: JSON.stringify({ lastReadMessageId: items.at(-1)?.id ?? null }),
+            });
+            if (!disposed) setConversations((current) => current.map((conversation) => conversation.id === selectedConversationId ? { ...conversation, unread: false } : conversation));
+          } catch { if (!disposed) setNotice("Les messages sont chargés, mais leur état de lecture n’a pas pu être enregistré."); }
+        }
       })
       .catch((error: Error) => { if (!disposed) { setMessagesState("error"); setNotice(error.message); } });
     return () => { disposed = true; };
@@ -597,15 +624,17 @@ export default function App() {
   }, [authToken, selectedConversationId, activeTab, messageReload]);
 
   useEffect(() => {
-    if (!supabase || !authToken || !selectedOrg) return;
+    const realtimeClient = supabase;
+    if (!realtimeClient || !authToken || !selectedOrg) return;
     let disposed = false;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const channels: Array<ReturnType<typeof supabase.channel>> = [];
+    const channels: Array<ReturnType<typeof realtimeClient.channel>> = [];
     const refresh = () => {
       if (disposed || refreshTimer) return;
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
         void refreshWorkspace(selectedOrg).catch((error: Error) => setNotice(error.message));
+        void refreshOpenMessages().catch((error: Error) => setNotice(error.message));
       }, 150);
     };
     const refreshFromEvent = (payload: unknown) => {
@@ -613,8 +642,7 @@ export default function App() {
       const kind = (payload as { kind?: unknown }).kind;
       const reportError = (error: Error) => { if (!disposed) setNotice(error.message); };
       if (kind === "contact") {
-        void api<{ items: Contact[] }>(`/v1/organizations/${selectedOrg}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`)
-          .then(({ items }) => { if (!disposed) setContacts(items); }).catch(reportError);
+        void directory.refresh();
       } else if (kind === "device") {
         void api<{ items: DeviceRecord[] }>("/v1/devices")
           .then(({ items }) => { if (!disposed) setDevices(items); }).catch(reportError);
@@ -630,7 +658,7 @@ export default function App() {
             .then(async ({ items }) => {
               if (disposed || selectedConversationIdRef.current !== conversationId) return;
               setConversationMessages((current) => [...new Map([...current, ...items].map((item) => [item.id, item])).values()]);
-              if (activeTabRef.current === "conversations") {
+              if (activeTabRef.current === "conversations" && document.visibilityState === "visible") {
                 await api(`/v1/conversations/${conversationId}/read`, {
                   method: "PUT",
                   body: JSON.stringify({ lastReadMessageId: items.at(-1)?.id ?? null }),
@@ -644,10 +672,10 @@ export default function App() {
     const topics = [`org:${selectedOrg}:contacts`, `user:${session.user.id}:devices`];
     if (activeLine?.id && activeAssignment?.can_voice) topics.push(`line:${activeLine.id}:voice`);
     if (activeLine?.id && activeAssignment?.can_sms) topics.push(`line:${activeLine.id}:sms`);
-    void supabase.realtime.setAuth(authToken).then(() => {
+    void realtimeClient.realtime.setAuth(authToken).then(() => {
       if (disposed) return;
       for (const topic of topics) {
-        const channel = supabase.channel(topic, { config: { private: true } })
+        const channel = realtimeClient.channel(topic, { config: { private: true } })
           .on("broadcast", { event: "onoff.activity" }, refreshFromEvent);
         let subscribedBefore = false;
         channel.subscribe((status) => {
@@ -660,7 +688,7 @@ export default function App() {
     return () => {
       disposed = true;
       if (refreshTimer) clearTimeout(refreshTimer);
-      for (const channel of channels) void supabase.removeChannel(channel);
+      for (const channel of channels) void realtimeClient.removeChannel(channel);
     };
   // Invalidation payloads contain IDs/status only; read current state from the API.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -671,6 +699,8 @@ export default function App() {
     const refreshWhenVisible = () => {
       if (navigator.onLine && document.visibilityState === "visible") {
         void refreshWorkspace(selectedOrg).catch((error: Error) => setNotice(error.message));
+        void directory.refresh();
+        void refreshOpenMessages().catch((error: Error) => setNotice(error.message));
       }
     };
     const markOnline = () => setNetworkOnline(true);
@@ -686,14 +716,14 @@ export default function App() {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, selectedOrg]);
+  }, [authToken, selectedOrg, contactSearch]);
 
   useEffect(() => {
-    if (!authToken || !selectedOrg || !activeLine?.id || !activeLine.voice_enabled || !activeAssignment?.can_voice) {
+    if (!session?.user.id || !services?.voiceEnabled || !selectedOrg || !activeLine?.id || !activeLine.voice_enabled || !activeAssignment?.can_voice) {
       setVoiceTabOwner(false);
       void shutdownVoiceClient();
       if (!authToken) deviceRef.current = null;
-      setVoiceStatus("Ligne inactive");
+      setVoiceStatus(!services ? "Vérification du service vocal…" : !services.voiceEnabled ? "Les appels sont désactivés dans cet environnement." : "Aucune ligne vocale autorisée.");
       return;
     }
     let disposed = false;
@@ -746,7 +776,15 @@ export default function App() {
     };
   // Keep one Twilio Device registered for this browser profile across its tabs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, selectedOrg, activeLine?.id, activeLine?.voice_enabled, activeAssignment?.can_voice, session?.user.id]);
+  }, [selectedOrg, activeLine?.id, activeLine?.voice_enabled, activeAssignment?.can_voice, session?.user.id, services?.voiceEnabled, voiceRetry]);
+
+  async function signOut() {
+    if (!supabase) return;
+    setBusy(true);
+    try { const { error } = await supabase.auth.signOut(); if (error) throw error; }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Déconnexion impossible. Réessayez."); }
+    finally { setBusy(false); }
+  }
 
   async function signIn(event: React.FormEvent) {
     event.preventDefault();
@@ -765,6 +803,7 @@ export default function App() {
 
   async function sendPasswordReset() {
     setAuthError("");
+    setBusy(true);
     try {
       if (!supabase || !email.trim()) throw new Error("Saisissez d’abord votre adresse email.");
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
@@ -772,7 +811,7 @@ export default function App() {
       setAuthError("Un lien de réinitialisation a été envoyé si cette adresse possède un compte.");
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Le lien de réinitialisation n’a pas pu être envoyé.");
-    }
+    } finally { setBusy(false); }
   }
 
   async function updateRecoveredPassword(event: React.FormEvent) {
@@ -832,7 +871,7 @@ export default function App() {
     setBusy(true);
     setContactFormError("");
     try {
-      const payload = JSON.stringify({ displayName: contactName.trim(), email: contactEmail.trim() || null, phones: phone ? [{ phoneNumber: phone, label: "Mobile" }] : [] });
+      const payload = JSON.stringify({ displayName: contactName.trim(), email: contactEmail.trim() || null, phones: editedContactPhones(editingContact, phone) });
       if (editingContact) {
         await api(`/v1/contacts/${editingContact.id}`, { method: "PATCH", body: JSON.stringify({ ...JSON.parse(payload), version: editingContact.version }) });
       } else {
@@ -843,9 +882,10 @@ export default function App() {
       setContactName("");
       setContactPhone("");
       setContactEmail("");
-      await refreshWorkspace();
       setContactEditorOpen(false);
+      await directory.refresh();
       setNotice(wasEditing ? "Contact modifié." : "Contact ajouté au carnet partagé.");
+      void refreshWorkspace().catch(() => setNotice("Contact enregistré. Actualisez les conversations pour recharger son nom."));
     } catch (error) {
       setContactFormError(error instanceof Error ? error.message : "Le contact n’a pas pu être enregistré.");
     } finally {
@@ -872,8 +912,9 @@ export default function App() {
         setContactPhone("");
         setContactEmail("");
       }
-      await refreshWorkspace();
+      await directory.refresh();
       setNotice("Contact archivé.");
+      void refreshWorkspace().catch(() => setNotice("Contact archivé. Actualisez les conversations pour recharger leurs noms."));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Le contact n’a pas pu être archivé.");
     } finally {
@@ -888,7 +929,7 @@ export default function App() {
       setNotice("Les envois SMS précédents doivent être vérifiés avant un nouvel envoi.");
       return;
     }
-    if (!selectedOrg || !activeLine || !activeAssignment?.can_sms || !activeLine.sms_enabled) return;
+    if (!canSms || !selectedOrg || !activeLine) { setNotice(smsUnavailable); return; }
     const normalizedDestination = messageDestination.replace(/[\s().-]/g, "");
     if (!/^\+[1-9]\d{7,14}$/.test(normalizedDestination)) {
       setNotice("Saisissez un numéro international au format +32… .");
@@ -998,7 +1039,7 @@ export default function App() {
     if (!voiceTabOwner) {
       throw new Error("Les appels sont actifs dans un autre onglet. Fermez-le pour reprendre ici.");
     }
-    if (!networkOnline || !selectedOrg || !activeLine || !activeAssignment?.can_voice || !activeLine.voice_enabled) throw new Error("La ligne vocale n’est pas disponible.");
+    if (!canCall || !selectedOrg || !activeLine) throw new Error("La ligne vocale n’est pas disponible.");
     const normalizedDestination = normalizePhoneNumber(number);
     if (!normalizedDestination) {
       throw new Error("Saisissez un numéro international ou un numéro français à 10 chiffres.");
@@ -1073,10 +1114,12 @@ export default function App() {
     </main>
   );
 
+  const authorizationId = new URLSearchParams(window.location.search).get("authorization_id");
+  if (authorizationId) return <McpConsent api={api} authorizationId={authorizationId} organizations={organizations}/>;
   const activeDevices = devices.filter((device) => device.organization_id === selectedOrg);
   const unreadCount = conversations.filter((conversation) => conversation.unread).length;
   const duplicateContact = normalizePhoneNumber(contactPhone) ? contacts.find((contact) => contact.id !== editingContact?.id && contact.contact_phones.some((phone) => phone.phone_number === normalizePhoneNumber(contactPhone))) : null;
-  const sectionTitle = activeTab === "center" ? "IVR & files d’attente" : activeTab === "admin" ? "Administration" : activeTab === "powerdialer" ? "Powerdialer" : activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
+  const sectionTitle = activeTab === "statistics" ? "Statistiques" : activeTab === "center" ? "IVR & files d’attente" : activeTab === "admin" ? "Administration" : activeTab === "powerdialer" ? "Powerdialer" : activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
   const lineOptions = lines.filter((item) => item.lines);
 
   return <div className="app-shell">
@@ -1088,24 +1131,26 @@ export default function App() {
         <button className={`nav-item${activeTab === "contacts" ? " selected" : ""}`} aria-current={activeTab === "contacts" ? "page" : undefined} onClick={() => setActiveTab("contacts")}><Users size={20} /><span>Contacts</span></button>
         <button className={`nav-item${activeTab === "powerdialer" ? " selected" : ""}`} aria-current={activeTab === "powerdialer" ? "page" : undefined} onClick={() => setActiveTab("powerdialer")}><Lightning size={20} /><span>Powerdialer</span></button>
         {canPurchaseNumber && <button className={`nav-item${activeTab === "center" ? " selected" : ""}`} aria-current={activeTab === "center" ? "page" : undefined} onClick={() => setActiveTab("center")}><Headset size={20}/><span>IVR & files d’attente</span></button>}
+        {canPurchaseNumber && <button className={`nav-item statistics-nav-item${activeTab === "statistics" ? " selected" : ""}`} aria-current={activeTab === "statistics" ? "page" : undefined} onClick={() => setActiveTab("statistics")}><ChartBar size={20}/><span>Statistiques</span></button>}
         {canPurchaseNumber && <button className={`nav-item admin-nav-item${activeTab === "admin" ? " selected" : ""}`} aria-current={activeTab === "admin" ? "page" : undefined} onClick={() => setActiveTab("admin")}><ShieldCheck size={20} /><span>Administration</span></button>}
         <button className={`nav-item mobile-settings${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
       </nav>
       <div className="sidebar-bottom">
-        <div className="sidebar-line"><span className="side-label">VOTRE LIGNE</span>{lineOptions.length > 1 ? <select aria-label="Ligne active" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked} onChange={(event) => selectLine(event.target.value)}>{lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>)}</select> : <strong>{activeLine ? formatPhone(activeLine.phone_number) : "Aucune ligne attribuée"}</strong>}<span className="line-availability"><i className={voiceTabOwner && voiceRegisteredRef.current ? "available" : ""} />{voiceTabOwner && voiceRegisteredRef.current ? "Disponible pour les appels" : activeLine ? "Appels en attente" : "Ajoutez une ligne pour commencer"}</span>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={14} />Ajouter une ligne</button>}</div>
+        <div className="sidebar-line"><span className="side-label">VOTRE LIGNE</span>{lineOptions.length > 1 ? <select aria-label="Ligne active" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked} onChange={(event) => selectLine(event.target.value)}>{lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>)}</select> : <strong>{activeLine ? formatPhone(activeLine.phone_number) : "Aucune ligne attribuée"}</strong>}<span className="line-availability"><i className={voiceTabOwner && voiceRegisteredRef.current ? "available" : ""} />{voiceTabOwner && voiceRegisteredRef.current ? "Disponible pour les appels" : activeLine ? voiceStatus : "Ajoutez une ligne pour commencer"}</span>{canPurchaseNumber && <button className="text-button" disabled={!canBuy || conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={14} />Ajouter une ligne</button>}</div>
         <button className={`nav-item${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
         <button className="profile-button" onClick={() => setActiveTab("settings")}><Avatar name={session.user.email ?? "Moi"} /><span><b>{session.user.email?.split("@")[0] ?? "Mon compte"}</b><small>{canPurchaseNumber ? "Administrateur" : "Membre de l’équipe"}</small></span></button>
       </div>
     </aside>
 
     <main className="main-area">
-      {selectedOrg && <QueuePresence key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api}/>}
-      <header className="topbar"><div className="topbar-title"><h1>{sectionTitle}</h1><span>{organizationName}</span></div><div className="topbar-actions"><button className="icon-button" aria-label="Actualiser l’espace" title="Actualiser" disabled={workspaceState === "loading"} onClick={() => { setAdminRefresh((value) => value + 1); void retryWorkspace(); }}><ArrowClockwise size={18} /></button><button className="button button-secondary" onClick={() => openCall()}><Phone size={17} /><span>{voiceState !== "idle" || incomingFrom ? "Appel en cours" : "Nouvel appel"}</span></button></div></header>
+      {selectedOrg && services?.administrationEnabled && <QueuePresence key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api}/>}
+      <header className="topbar"><div className="topbar-title"><h1>{sectionTitle}</h1><span>{organizationName}</span></div><div className="topbar-actions"><button className="icon-button" aria-label="Actualiser l’espace" title="Actualiser" disabled={workspaceState === "loading"} onClick={() => { setAdminRefresh((value) => value + 1); void retryWorkspace(); }}><ArrowClockwise size={18} /></button><button className="button button-secondary" disabled={voiceState === "idle" && !incomingFrom && (!canCall || busy || powerDialerLocked)} onClick={() => openCall()}><Phone size={17} /><span>{voiceState !== "idle" || incomingFrom ? "Appel en cours" : "Nouvel appel"}</span></button></div></header>
       <div className="mobile-line-switch"><label>Votre ligne<select aria-label="Ligne active sur mobile" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked || !lineOptions.length} onChange={(event) => selectLine(event.target.value)}>{lineOptions.length ? lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>) : <option value="">Aucune ligne attribuée</option>}</select></label></div>
+      {services && (!services.voiceEnabled || !services.smsEnabled || services.operationsPaused || !services.administrationEnabled) && <div className="app-banner warning" role="status"><WarningCircle size={18}/><span>{services.operationsPaused ? services.pauseMessage : [!services.voiceEnabled && "Appels désactivés.", !services.smsEnabled && "SMS désactivés.", !services.administrationEnabled && "Administration non configurée."].filter(Boolean).join(" ")} {canPurchaseNumber && "La configuration serveur doit être terminée pour activer ces services."}</span></div>}
       {!networkOnline && <div className="app-banner warning" role="status"><WarningCircle size={18} /><span>Vous êtes hors ligne. Reconnectez-vous pour retrouver vos échanges.</span></div>}
       {notice && <div className="app-banner" role="status"><ChatCircle size={18} /><span>{notice}</span><button className="icon-button" aria-label="Fermer le message" onClick={() => setNotice("")}><X size={16} /></button></div>}
       {smsRecoveryState === "unavailable" && <div className="app-banner warning" role="alert"><WarningCircle size={18} /><span>Impossible de vérifier les SMS précédents.</span><button className="text-button" onClick={() => void retrySmsRecovery()}>Réessayer</button></div>}
-      {!activeLine && workspaceState === "ready" && <div className="app-banner"><Phone size={18} /><span>{canPurchaseNumber ? "Ajoutez votre première ligne pour commencer à échanger." : "Demandez à votre administrateur de vous attribuer une ligne."}</span>{canPurchaseNumber && <button className="text-button" onClick={() => setNumberPurchaseOpen(true)}>Ajouter une ligne</button>}</div>}
+      {!activeLine && workspaceState === "ready" && <div className="app-banner"><Phone size={18} /><span>{canPurchaseNumber ? "Ajoutez votre première ligne pour commencer à échanger." : "Demandez à votre administrateur de vous attribuer une ligne."}</span>{canPurchaseNumber && <button className="text-button" disabled={!canBuy} onClick={() => setNumberPurchaseOpen(true)}>Ajouter une ligne</button>}</div>}
 
       <PowerDialer key={`${session.user.id}:${selectedOrg}:${activeLine?.id ?? ""}`} visible={activeTab === "powerdialer"}
         scope={{ userId: session.user.id, organizationId: selectedOrg, lineId: activeLine?.id ?? "" }}
@@ -1116,30 +1161,31 @@ export default function App() {
         onStart={(number, shouldContinue) => startVoiceCall(number, shouldContinue, true)} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigits={(digits) => voiceClient.current?.sendDigits(digits)}
         subscribe={subscribePowerDialer} onLock={setPowerDialerLocked}
       />
-      {activeTab === "powerdialer" ? null : activeTab === "conversations" ? <Conversations
+      {activeTab === "statistics" ? (canPurchaseNumber && selectedOrg ? <Statistics key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} refreshKey={adminRefresh}/> : <EmptyState icon={<ChartBar/>} title="Accès administrateur requis"/>) : activeTab === "powerdialer" ? null : activeTab === "conversations" ? <Conversations
         inbox={inbox} contacts={contacts} number={messageDestination} lineNumber={activeLine?.phone_number ?? ""}
         messages={conversationMessages} body={messageBody} dataState={workspaceState} messagesState={messagesState}
-        busy={busy || smsRecoveryState !== "ready"} locked={conversationLocked} pending={Boolean(pendingSmsAttempt)}
-        canSms={canSms} canCall={canCall && !powerDialerLocked && !busy && voiceState === "idle"} segments={smsSegmentInfo.segments}
+        busy={busy || !networkOnline || smsRecoveryState !== "ready"} locked={conversationLocked} pending={Boolean(pendingSmsAttempt)}
+        canSms={canSms} smsUnavailable={smsUnavailable} canCall={canCall && !powerDialerLocked && !busy && voiceState === "idle"} segments={smsSegmentInfo.segments}
         hasMore={Boolean(historyCursors.calls || historyCursors.conversations)} hasOlderMessages={Boolean(messagesCursor)} loadingMore={loadingMore}
         onMore={() => void loadMoreHistory()} onOlderMessages={() => void loadOlderMessages()}
         onOpen={openConversation} onNew={() => setNewConversationOpen(true)}
         onBack={() => { drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody; setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); }}
         onBody={setMessageBody} onSend={sendMessage} onCall={openCall} onAddContact={newContact} onRetry={() => void retryWorkspace()}
-      /> : activeTab === "center" ? (canPurchaseNumber && selectedOrg ? <CallCenter key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} audio={async path => { const response = await fetch(`${apiBase}${path}`, { headers: { authorization: `Bearer ${authToken}` } }); if (!response.ok) throw new Error("L’enregistrement est indisponible."); return response.blob(); }} /> : <EmptyState icon={<Headset/>} title="Accès administrateur requis"/>) : activeTab === "contacts" ? <Contacts contacts={contacts} search={contactSearch} busy={busy || conversationLocked} dataState={workspaceState} onSearch={setContactSearch} onAdd={() => newContact()} onEdit={beginEditContact} onArchive={(contact) => void archiveContact(contact)} onCall={(contact) => openCall(contact.contact_phones[0]?.phone_number)} onMessage={(contact) => openConversation(contact.contact_phones[0]?.phone_number ?? "")} /> : activeTab === "admin" ? (canPurchaseNumber && selectedOrg ? <Admin key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} api={api} refreshKey={adminRefresh} onPurchase={() => setNumberPurchaseOpen(true)} onChanged={async () => { const result = await api<{ items: Organization[] }>("/v1/organizations"); setOrganizations(result.items); if (!result.items.some((item) => item.organization_id === selectedOrg && item.role === "admin")) setActiveTab("settings"); await refreshWorkspace(selectedOrg); }} /> : <EmptyState icon={<ShieldCheck size={26} />} title="Accès administrateur requis"><p>Choisissez un espace dans lequel vous êtes administrateur.</p></EmptyState>) : <section className="settings-page">
+      /> : activeTab === "center" ? (canPurchaseNumber && selectedOrg ? <CallCenter key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} refreshKey={adminRefresh} audio={async path => { const response = await fetch(`${apiBase}${path}`, { headers: { authorization: `Bearer ${authToken}` } }); if (!response.ok) throw new Error("L’enregistrement est indisponible."); return response.blob(); }} /> : <EmptyState icon={<Headset/>} title="Accès administrateur requis"/>) : activeTab === "contacts" ? <Contacts contacts={contacts} search={contactSearch} busy={busy || !networkOnline || !selectedOrg} canCall={canCall && !powerDialerLocked && voiceState === "idle"} canSms={canSms && !conversationLocked} dataState={directory.state} error={directory.error} hasMore={directory.hasMore} loadingMore={directory.loadingMore} onMore={() => void directory.more()} onRetry={() => void directory.refresh()} onSearch={setContactSearch} onAdd={() => newContact()} onEdit={beginEditContact} onArchive={(contact) => void archiveContact(contact)} onCall={(contact) => openCall(contact.contact_phones[0]?.phone_number)} onMessage={(contact) => openConversation(contact.contact_phones[0]?.phone_number ?? "")} /> : activeTab === "admin" ? (canPurchaseNumber && selectedOrg ? <Admin key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} api={api} refreshKey={adminRefresh} purchaseEnabled={canBuy} onPurchase={() => setNumberPurchaseOpen(true)} onChanged={async () => { const result = await api<{ items: Organization[] }>("/v1/organizations"); setOrganizations(result.items); if (!result.items.some((item) => item.organization_id === selectedOrg && item.role === "admin")) setActiveTab("settings"); await refreshWorkspace(selectedOrg); }} /> : <EmptyState icon={<ShieldCheck size={26} />} title="Accès administrateur requis"><p>Choisissez un espace dans lequel vous êtes administrateur.</p></EmptyState>) : <section className="settings-page">
         <div className="section-intro"><div><h2>Votre espace de travail</h2><p>Votre compte, vos lignes et vos appareils.</p></div></div>
-        <section className="settings-section"><h3>Mon compte</h3><div className="account-row"><Avatar name={session.user.email ?? "Moi"} /><div><b>{session.user.email}</b><p>{organizationName}</p></div><button className="button button-secondary" disabled={Boolean(pendingSmsAttempt) || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => void supabase?.auth.signOut()}><SignOut size={17} />Se déconnecter</button></div></section>
-        <section className="settings-section"><div className="settings-section-heading"><h3>Mes lignes</h3>{canPurchaseNumber && <button className="text-button" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={16} />Ajouter une ligne</button>}</div>{lineOptions.map((item) => <div className="settings-line-row" key={item.lines!.id}><Phone size={21} /><div><b>{formatPhone(item.lines!.phone_number)}</b><p>{item.can_voice && item.lines!.voice_enabled ? "Appels activés" : "Appels indisponibles"} · {item.can_sms && item.lines!.sms_enabled ? "SMS activés" : "SMS indisponibles"}</p></div>{item.lines!.id === activeLine?.id ? <span className="selected-line"><CheckCircle size={16} />Sélectionnée</span> : <button className="button button-secondary" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => selectLine(item.lines!.id)}>Utiliser cette ligne</button>}</div>)}{!lineOptions.length && <p className="settings-description">Aucune ligne attribuée pour le moment.</p>}</section>
+        <section className="settings-section"><h3>Mon compte</h3><div className="account-row"><Avatar name={session.user.email ?? "Moi"} /><div><b>{session.user.email}</b><p>{organizationName}</p></div><button className="button button-secondary" disabled={Boolean(pendingSmsAttempt) || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => void signOut()}><SignOut size={17} />Se déconnecter</button></div></section>
+        <section className="settings-section"><div className="settings-section-heading"><h3>Mes lignes</h3>{canPurchaseNumber && <button className="text-button" disabled={!canBuy || conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={16} />Ajouter une ligne</button>}</div>{lineOptions.map((item) => <div className="settings-line-row" key={item.lines!.id}><Phone size={21} /><div><b>{formatPhone(item.lines!.phone_number)}</b><p>{services?.voiceEnabled && !services.operationsPaused && item.can_voice && item.lines!.voice_enabled ? "Appels activés" : "Appels indisponibles"} · {services?.smsEnabled && !services.operationsPaused && item.can_sms && item.lines!.sms_enabled ? "SMS activés" : "SMS indisponibles"}</p></div>{item.lines!.id === activeLine?.id ? <span className="selected-line"><CheckCircle size={16} />Sélectionnée</span> : <button className="button button-secondary" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => selectLine(item.lines!.id)}>Utiliser cette ligne</button>}</div>)}{!lineOptions.length && <p className="settings-description">Aucune ligne attribuée pour le moment.</p>}</section>
         <section className="settings-section"><div className="settings-section-heading"><h3>Appareils connectés</h3><span>{activeDevices.filter((device) => device.status === "active").length} actifs</span></div><p className="settings-description">Gérez les appareils autorisés à utiliser votre compte.</p>{activeDevices.map((device) => <div className="device-row" key={device.id}><span className="device-icon">{device.platform === "web" ? <Monitor /> : <DeviceMobile />}</span><div><b>{device.label || device.platform}</b><p>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${new Date(device.last_active_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : ""}</p></div>{device.status === "active" && <button className="text-button danger-text" disabled={busy || powerDialerLocked || voiceState !== "idle"} onClick={() => void revokeDevice(device.id)}>Révoquer</button>}</div>)}{!activeDevices.length && <EmptyState icon={<Monitor size={26} />} title="Aucun appareil enregistré"><p>Votre navigateur sera associé lors de l’activation des appels.</p></EmptyState>}</section>
-        <section className="settings-section"><h3>État des appels</h3><p className="voice-settings-status"><Microphone size={17} />{voiceStatus}</p><p className="settings-description">Un seul onglet reçoit vos appels à la fois. Si vous le fermez, un autre onglet ouvert prend le relais.</p></section>
+        <section className="settings-section"><h3>État des appels</h3><p className="voice-settings-status"><Microphone size={17} />{voiceStatus}</p>{services?.voiceEnabled && activeLine?.voice_enabled && activeAssignment?.can_voice && <button className="text-button" disabled={busy || voiceState !== "idle" || powerDialerLocked || !networkOnline} onClick={() => setVoiceRetry(value => value + 1)}>Reconnecter cet appareil</button>}<p className="settings-description">Un seul onglet reçoit vos appels à la fois. Si vous le fermez, un autre onglet ouvert prend le relais.</p></section>
+        <McpIntegrations key={session.user.id} api={api} initialDraftId={new URLSearchParams(window.location.search).get("mcpSms") ?? ""}/>
         <p className="settings-version">onoff · Version {webPackage.version}</p>
       </section>}
     </main>
 
     {(voiceState !== "idle" || incomingFrom) && !dialerOpen && !(powerDialerLocked && activeTab === "powerdialer") && <button className="active-call-bar" onClick={() => powerDialerLocked ? setActiveTab("powerdialer") : setDialerOpen(true)}><Phone size={19} /><span>{incomingFrom ? "Appel entrant" : voiceStatus}</span><ArrowRight size={17} /></button>}
-    {newConversationOpen && <NewConversation contacts={contacts} onClose={() => setNewConversationOpen(false)} onOpen={(number) => openConversation(number)} />}
+    {newConversationOpen && <NewConversation scope={`${session.user.id}:${selectedOrg}`} loadContacts={(query, cursor, signal) => apiClient.getPage<Contact>(`/v1/organizations/${selectedOrg}/contacts`, { limit: 50, cursor, query: { q: query || undefined }, signal })} onClose={() => setNewConversationOpen(false)} onOpen={(number) => openConversation(number)} />}
     {dialerOpen && <CallDialog number={destination} name={destinationContact?.display_name ?? null} line={activeLine?.phone_number ?? "non attribuée"} status={voiceStatus} state={voiceState} incoming={incomingFrom} muted={muted} enabled={canCall} busy={busy} onNumber={setDestination} onClose={() => setDialerOpen(false)} onCall={() => void startVoiceCall().catch((error: unknown) => setNotice(error instanceof Error ? error.message : "Appel impossible."))} onAccept={() => voiceClient.current?.acceptCall()} onReject={() => voiceClient.current?.rejectCall()} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigit={(digit) => voiceClient.current?.sendDigits(digit)} />}
-    {contactEditorOpen && <Modal title={editingContact ? "Modifier le contact" : "Ajouter un contact"} onClose={() => setContactEditorOpen(false)} busy={busy}><form className="contact-form" onSubmit={createContact}><label className="field-label">Nom du contact<input autoFocus value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Prénom Nom" required maxLength={120} /></label><label className="field-label">Téléphone<input inputMode="tel" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} placeholder="+33 6 12 34 56 78" /></label>{duplicateContact && <p className="inline-warning" role="status">Ce numéro est déjà associé à {duplicateContact.display_name}.</p>}<label className="field-label">Email <span className="optional-label">(facultatif)</span><input type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="nom@entreprise.com" /></label>{contactFormError && <p className="form-error" role="alert">{contactFormError}</p>}<div className="modal-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={() => setContactEditorOpen(false)}>Annuler</button><button className="button button-primary" disabled={busy}>{busy ? "Enregistrement…" : "Enregistrer"}</button></div></form></Modal>}
+    {contactEditorOpen && <Modal title={editingContact ? "Modifier le contact" : "Ajouter un contact"} onClose={() => setContactEditorOpen(false)} busy={busy}><form className="contact-form" onSubmit={createContact}><label className="field-label">Nom du contact<input autoFocus value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Prénom Nom" required maxLength={120} /></label><label className="field-label">Téléphone<input inputMode="tel" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} placeholder="+33 6 12 34 56 78" /></label>{duplicateContact && <p className="inline-warning" role="status">Ce numéro est déjà associé à {duplicateContact.display_name}.</p>}{editingContact && editingContact.contact_phones.length > 1 && <p className="form-note">Autres numéros conservés : {editingContact.contact_phones.slice(1).map(phone => formatPhone(phone.phone_number)).join(", ")}</p>}<label className="field-label">Email <span className="optional-label">(facultatif)</span><input type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="nom@entreprise.com" /></label>{contactFormError && <p className="form-error" role="alert">{contactFormError}</p>}<div className="modal-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={() => setContactEditorOpen(false)}>Annuler</button><button className="button button-primary" disabled={busy}>{busy ? "Enregistrement…" : "Enregistrer"}</button></div></form></Modal>}
     {numberPurchaseOpen && selectedOrg && <NumberPurchase key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} email={session.user.email ?? "votre compte"} api={api} onClose={() => setNumberPurchaseOpen(false)} onPurchased={async (lineId) => { await refreshWorkspace(selectedOrg); setSelectedLineId(lineId); setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); if (activeTab === "admin") { setAdminRefresh((value) => value + 1); } else { setActiveTab("conversations"); setDialerOpen(true); } setNumberPurchaseOpen(false); setNotice("Votre nouvelle ligne est prête."); }} />}
   </div>;
 }

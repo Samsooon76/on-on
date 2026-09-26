@@ -12,9 +12,10 @@ Le paquet `@onoff/api-client` fournit au Web et au mobile l'ajout du jeton injec
 
 - `GET /health/live` et `GET /health/ready`; les deux réponses exposent `version`, lu depuis `apps/api/package.json` (version actuelle `0.1.0`).
 - `GET /v1/me`, `GET /v1/organizations`, `GET /v1/organizations/:orgId/lines`
+- `GET /v1/services` retourne la configuration effective (`voiceEnabled`, `smsEnabled`, `administrationEnabled`, `numberPurchaseEnabled`, `operationsPaused`, `pauseMessage`). Route authentifiée, sans cache ni secrets ; la disponibilité réseau du fournisseur n’est pas garantie par ces indicateurs. Déployer l’API avant le web qui les consomme.
 - `GET /v1/organizations/:orgId/number-offers?country=FR`, `POST /v1/organizations/:orgId/number-orders` et `GET /v1/organizations/:orgId/number-orders` : achat Twilio réservé aux administrateurs, tarif confirmé, attribution au compte connecté et reprise sans nouvel achat. Voir [le parcours de commande](runbooks/number-provisioning.md).
 - `PUT` and `DELETE /v1/organizations/:orgId/lines/:lineId/assignments/:userId` require an active organization admin. Updates validate the target membership and line capabilities in a service-only transaction; revocation is soft, idempotent, and audited.
-- `GET /v1/organizations/:orgId/contacts?limit=&cursor=&q=` et `POST /v1/organizations/:orgId/contacts`
+- `GET /v1/organizations/:orgId/contacts?limit=&cursor=&q=` et `POST /v1/organizations/:orgId/contacts`. `q` recherche un nom, un email contenant `@` ou un numéro complet normalisé. Une recherche par numéro conserve tous les téléphones du contact dans la réponse.
 - `GET/PATCH/DELETE /v1/contacts/:id` (suppression logique / archivage)
 - `GET/POST /v1/devices`, `PUT /v1/devices/:id/voice-state`, `POST /v1/devices/:id/revoke`
 - `POST /v1/voice/token`, `POST /v1/call-intents`, `GET /v1/lines/:lineId/calls?limit=&cursor=`

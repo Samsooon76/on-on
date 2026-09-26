@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from "react";
-import { ArrowRight, Check, CheckCircle, DownloadSimple, Headset, Lightning, ListNumbers, MagnifyingGlass, Microphone, MicrophoneSlash, Pause, Phone, PhoneDisconnect, Play, Plus, SkipForward, Sparkle, Tag, Trash, X } from "@phosphor-icons/react";
+import { ArrowRight, Check, CheckCircle, DownloadSimple, Headset, Lightning, ListNumbers, MagnifyingGlass, Microphone, MicrophoneSlash, Pause, Phone, PhoneDisconnect, Play, Plus, SkipForward, Tag, Trash, X } from "@phosphor-icons/react";
 import type { VoiceEvent } from "@onoff/voice-contract";
 import { Avatar, EmptyState, Modal } from "./ui";
 import { callLabel, formatPhone, phoneKey, type CallRecord, type Contact } from "./conversation-model";
@@ -174,7 +174,6 @@ export function PowerDialer(props: Props) {
       <p>Préparez votre liste, lancez le premier appel.<br />Un résultat suffit pour passer au suivant.</p>
       <button className="button button-primary" onClick={() => setPickerOpen(true)} disabled={!props.scope.organizationId}><Plus size={17} />Créer ma file d’appels</button>
       <div className="pd-steps"><span><b>1</b>Sélectionnez vos contacts</span><span><b>2</b>Appelez et prenez des notes</span><span><b>3</b>Qualifiez, puis enchaînez</span></div>
-      <div className="pd-coming"><Sparkle size={17} /><span>À venir avec JEV : tags suggérés et détection des appels argumentés.</span></div>
     </div> : <>
       <div className="pd-session-bar">
         <span className={`pd-session-status${state.running ? " is-running" : ""}`}><i />{state.phase === "complete" ? "Session terminée" : state.running ? "Session en cours" : state.entries.some((item) => item.attemptedAt) ? "Session en pause" : "Session prête"}</span>
@@ -203,7 +202,6 @@ export function PowerDialer(props: Props) {
             <div className="pd-context"><span>Dernier échange téléphonique</span><p>{latestCall ? `${callLabel(latestCall)} · ${new Date(latestCall.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : "Aucun appel dans l’historique chargé."}</p></div>
             <label className="pd-notes">Notes de l’appel<span>Facultatif · conservées dans cette session</span><textarea value={entry.notes} maxLength={5000} placeholder="Besoins, objections, prochaine étape…" onFocus={() => { if (state.phase === "between") dispatch({ type: "pause" }); }} onChange={(event) => dispatch({ type: "notes", id: entry.id, notes: event.target.value })} /></label>
             <section className="pd-qualification" aria-label="Résultat de l’appel"><div><h4><Tag size={16} />Résultat de l’appel</h4><span>{state.phase === "calling" ? "Un clic raccroche et passe au suivant" : "Un clic pour qualifier et continuer"}</span></div><div className="pd-outcomes">{outcomes.map((outcome) => <button key={outcome.id} disabled={!["calling", "wrapup"].includes(state.phase)} onClick={() => qualify(outcome.id)} aria-keyshortcuts={outcome.key}><span>{outcome.label}</span><kbd>{outcome.key}</kbd></button>)}</div>{entry.outcome && <p className="pd-result-saved"><Check size={14} />{outcomes.find((outcome) => outcome.id === entry.outcome)?.label} · résultat retenu</p>}</section>
-            <div className="pd-jev"><Sparkle size={20} /><div><strong>La qualification assistée par JEV</strong><p>Tags et appels argumentés apparaîtront ici après analyse.</p></div><span>À venir</span></div>
           </> : <div className="pd-complete"><CheckCircle size={45} weight="light" /><h3>Votre file est terminée.</h3><p>{completed.length} appel{completed.length > 1 ? "s" : ""} qualifié{completed.length > 1 ? "s" : ""}{skipped ? ` · ${skipped} contact${skipped > 1 ? "s" : ""} ignoré${skipped > 1 ? "s" : ""}` : ""}</p><div className="pd-summary-counts">{outcomes.map((outcome) => <div key={outcome.id}><strong>{completed.filter((item) => item.outcome === outcome.id).length}</strong><span>{outcome.label}</span></div>)}</div><button className="button button-primary" onClick={exportSession}><DownloadSimple size={17} />Exporter le bilan et les notes</button><button className="text-button" onClick={() => setPickerOpen(true)}><Plus size={15} />Ajouter d’autres contacts</button></div>}
         </div>
       </div>

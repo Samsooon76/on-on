@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import twilio from "twilio";
 import { z } from "zod";
 import { hasZodFastifySchemaValidationErrors, serializerCompiler, validatorCompiler, type ZodTypeProvider } from "@fastify/type-provider-zod";
-import { callIntentCreateSchema, contactCreateSchema, contactUpdateSchema, deviceCreateSchema, lineAssignmentUpdateSchema, messageCreateSchema, paginationSchema, uuidSchema, voiceTargetSchema, type Database } from "@onoff/contracts";
+import { callIntentCreateSchema, contactCreateSchema, contactUpdateSchema, deviceCreateSchema, lineAssignmentUpdateSchema, messageCreateSchema, normalizePhoneNumber, paginationSchema, uuidSchema, voiceTargetSchema, type Database } from "@onoff/contracts";
 import type { AppConfig } from "./config.js";
 import { requestBodySchemas, responsesForRoute } from "./response-schemas.js";
 import { findAssignedLine, getActiveOrganizationIds, isActiveOrganizationAdmin } from "./repositories/access.js";
@@ -12,6 +12,10 @@ import { persistLineAssignment } from "./repositories/line-assignments.js";
 import { createVoiceAccessToken } from "./voice.js";
 import { createNumberProvider, registerNumberRoutes, type NumberProvider } from "./number-provisioning.js";
 import { registerAdminRoutes } from "./admin.js";
+import { registerStatisticsRoutes } from "./statistics.js";
+import { serviceStatus } from "./services.js";
+import { isDelegatedToken, registerMcp } from "./mcp.js";
+import { deliverPreparedSms, type SmsProvider } from "./sms-delivery.js";
 import { renderIvr } from "./ivr.js";
 import { registerCallCenter } from "./call-center.js";
 import { createCenterProvider, type CenterProvider } from "./call-center-provider.js";
@@ -22,15 +26,7 @@ export type RequestContext = {
   supabase: SupabaseClient<Database>;
 };
 
-type SmsProvider = {
-  messages: {
-    create(input: { from: string; to: string; body: string; statusCallback: string }): Promise<{
-      sid: string;
-      status: string;
-      errorCode?: number | null;
-    }>;
-  };
-};
+
 
 export type ApiDependencies = {
   createSupabaseClient?: typeof createClient<Database>;
@@ -47,10 +43,6 @@ const voiceDiagnosticSchema = z.object({
   durationMs: z.number().int().min(0).max(300_000).optional(),
 });
 
-function safeProviderCode(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
-  return undefined;
-}
 
 function decodeCursor(value: string | undefined): PageCursor | null | false {
   if (!value) return null;
@@ -182,7 +174,8 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (origin && config.allowedOrigins.has(origin)) {
       reply.header("access-control-allow-origin", origin);
       reply.header("access-control-allow-credentials", "true");
-      reply.header("access-control-allow-headers", "authorization, content-type, idempotency-key, x-request-id");
+      reply.header("access-control-allow-headers", "authorization, content-type, idempotency-key, x-request-id, mcp-protocol-version, mcp-method, mcp-name");
+      reply.header("access-control-expose-headers", "www-authenticate, mcp-protocol-version, retry-after");
       reply.header("access-control-allow-methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
       reply.header("vary", "Origin");
     }
@@ -248,6 +241,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     const authorization = request.headers.authorization;
     const match = authorization?.match(/^Bearer (\S+)$/i);
     if (!match?.[1]) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
+    if (isDelegatedToken(match[1])) return reply.code(403).send({ code: "delegated_token_forbidden", message: "Utilisez le point d’entrée MCP pour cette connexion.", requestId: request.id });
 
     const userClient = makeSupabaseClient(config.SUPABASE_URL, config.SUPABASE_PUBLISHABLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -264,6 +258,12 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     config.TWILIO_ACCOUNT_SID && config.TWILIO_API_KEY_SID && config.TWILIO_API_KEY_SECRET ? createNumberProvider(config) : null
   ));
   registerAdminRoutes(app, serviceSupabase);
+  routes.get("/v1/services", async (_request, reply) => {
+    reply.header("cache-control", "no-store");
+    return serviceStatus(config);
+  });
+  registerStatisticsRoutes(app, serviceSupabase);
+  registerMcp(app, config, serviceSupabase, makeSupabaseClient, makeSmsProvider);
   const callCenter = registerCallCenter(app, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), config, validateTwilioWebhook);
 
   routes.post("/v1/diagnostics/voice", async (request, reply) => {
@@ -310,7 +310,21 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!orgId.success || !page.success || cursor === false || (request.query.q !== undefined && request.query.q.length > 80)) return reply.code(400).send({ code: "invalid_request", message: "Organisation ou pagination invalide.", requestId: request.id });
     let query = context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").eq("organization_id", orgId.data).is("archived_at", null).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(page.data.limit + 1);
     if (cursor) query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
-    if (request.query.q?.trim()) query = query.ilike("display_name", `%${request.query.q.trim()}%`);
+    const search = request.query.q?.trim();
+    if (search) {
+      const phone = normalizePhoneNumber(search);
+      if (phone) {
+        // Resolve IDs separately so every phone is retained in the contact response.
+        const matches = await context.supabase.from("contact_phones").select("contact_id")
+          .eq("organization_id", orgId.data).eq("phone_number", phone).limit(1000);
+        if (matches.error) return reply.code(503).send({ code: "data_unavailable", message: "La recherche par numéro est indisponible.", requestId: request.id });
+        if (!matches.data?.length) return { items: [], nextCursor: null };
+        if (matches.data.length >= 1000) return reply.code(422).send({ code: "search_too_broad", message: "Ce numéro correspond à trop de contacts. Recherchez par nom.", requestId: request.id });
+        query = query.in("id", [...new Set(matches.data.map(row => row.contact_id))]);
+      } else {
+        query = query.ilike(search.includes("@") ? "email" : "display_name", `%${search.replace(/[\\%_]/g, "\\$&")}%`);
+      }
+    }
     const { data, error } = await query;
     if (error) {
       request.log.warn({ code: error.code, requestId: request.id, table: "contacts" }, "contact list unavailable");
@@ -1034,59 +1048,9 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!outgoing.messageId || !outgoing.conversationId || !outgoing.fromNumber || !outgoing.destination) {
       return reply.code(503).send({ code: "message_not_prepared", message: "Le message n’a pas pu être préparé.", requestId: request.id });
     }
-    if (outgoing.replayed) {
-      const { data: existing } = await context.supabase.from("messages").select("id, conversation_id, status, provider_message_sid, created_at")
-        .eq("id", outgoing.messageId).maybeSingle();
-      request.log.info({ requestId: request.id, organizationId: parsed.data.organizationId, lineId: parsed.data.lineId, conversationId: outgoing.conversationId, messageId: outgoing.messageId, messageSid: existing?.provider_message_sid ?? undefined, status: existing?.status ?? "unknown", replayed: true }, "outbound message intent replayed");
-      return reply.code(202).send({ id: outgoing.messageId, conversationId: outgoing.conversationId, status: existing?.status ?? "unknown", submissionConfirmed: Boolean(existing?.provider_message_sid), replayed: true });
-    }
-
-    const callback = `${config.API_PUBLIC_URL.replace(/\/$/, "")}/webhooks/twilio/messages/status?messageId=${encodeURIComponent(outgoing.messageId)}`;
-    const client = makeSmsProvider(config.TWILIO_API_KEY_SID, config.TWILIO_API_KEY_SECRET, config.TWILIO_ACCOUNT_SID);
-    try {
-      const sent = await client.messages.create({ from: outgoing.fromNumber, to: outgoing.destination, body: parsed.data.body, statusCallback: callback });
-      const status = sent.status === "delivered" ? "delivered"
-        : sent.status === "failed" ? "failed"
-          : sent.status === "undelivered" ? "undelivered"
-            : sent.status === "sent" ? "sent"
-              : ["accepted", "queued", "sending", "scheduled"].includes(sent.status) ? "submitting" : "unknown";
-      const { data: storedResult, error: storeError } = await serviceSupabase.rpc("update_outbound_message_result", {
-        p_message_id: outgoing.messageId,
-        p_message_sid: sent.sid,
-        p_status: status,
-        ...(sent.errorCode == null ? {} : { p_error_code: String(sent.errorCode) }),
-      });
-      if (storeError) request.log.error({ code: storeError.code, requestId: request.id, messageId: outgoing.messageId }, "sent message result not stored");
-      const persistedStatus = storedResult && typeof storedResult === "object" && !Array.isArray(storedResult)
-        ? (storedResult as { status?: unknown }).status
-        : undefined;
-      const responseStatus = storeError
-        ? "unknown"
-        : typeof persistedStatus === "string" && ["pending", "submitting", "unknown", "sent", "delivered", "undelivered", "failed", "received"].includes(persistedStatus)
-          ? persistedStatus
-          : status;
-      const submittedFields = { requestId: request.id, organizationId: parsed.data.organizationId, lineId: parsed.data.lineId, conversationId: outgoing.conversationId, messageId: outgoing.messageId, messageSid: sent.sid, status: responseStatus, replayed: false };
-      if (storeError) request.log.error(submittedFields, "outbound message result uncertain");
-      else request.log.info(submittedFields, "outbound message submitted");
-      return reply.code(201).send({ id: outgoing.messageId, conversationId: outgoing.conversationId, status: responseStatus, submissionConfirmed: !storeError && Boolean(sent.sid) });
-    } catch (providerError) {
-      const failure = providerError as { status?: number; code?: number | string };
-      const providerCode = safeProviderCode(failure.code);
-      const providerStatus = typeof failure.status === "number" && Number.isSafeInteger(failure.status) ? failure.status : undefined;
-      const definiteFailure = providerStatus !== undefined && providerStatus >= 400 && providerStatus < 500;
-      const status = definiteFailure ? "failed" : "unknown";
-      const { error: storeError } = await serviceSupabase.rpc("update_outbound_message_result", {
-        p_message_id: outgoing.messageId,
-        // The SQL function accepts NULL when Twilio did not return a message SID.
-        p_message_sid: null as unknown as string,
-        p_status: status,
-        ...(providerCode === undefined ? {} : { p_error_code: String(providerCode) }),
-      });
-      request.log.warn({ providerStatus, providerCode, requestId: request.id, organizationId: parsed.data.organizationId, lineId: parsed.data.lineId, messageId: outgoing.messageId }, "outbound message delivery uncertain");
-      if (storeError) request.log.error({ code: storeError.code, requestId: request.id, messageId: outgoing.messageId }, "message outcome not stored");
-      if (definiteFailure) return reply.code(422).send({ code: "message_failed", message: "Twilio a refusé ce message.", requestId: request.id, id: outgoing.messageId, status });
-      return reply.code(202).send({ id: outgoing.messageId, conversationId: outgoing.conversationId, status: storeError ? "unknown" : status });
-    }
+    const delivered = await deliverPreparedSms(config, serviceSupabase, context.supabase, makeSmsProvider, parsed.data,
+      outgoing as { messageId: string; conversationId: string; fromNumber: string; destination: string; replayed?: boolean }, request.log, request.id);
+    return reply.code(delivered.statusCode).send(delivered.body);
   });
 
   routes.post("/webhooks/twilio/messages/inbound", async (request, reply) => {

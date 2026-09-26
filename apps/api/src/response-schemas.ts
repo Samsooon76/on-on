@@ -1,5 +1,6 @@
 import {
   callIntentCreateSchema,
+  serviceStatusSchema,
   contactCreateSchema,
   contactUpdateSchema,
   deviceCreateSchema,
@@ -148,6 +149,7 @@ export const requestBodySchemas = new Map<string, z.ZodType>([
 ]);
 
 export const successResponseSchemas = new Map<string, Record<number, z.ZodType>>([
+  ["GET /v1/services", { 200: serviceStatusSchema }],
   ["GET /v1/organizations/:orgId/number-offers", { 200: z.object({ items: z.array(numberOfferSchema) }) }],
   ["GET /v1/organizations/:orgId/number-orders", { 200: z.object({ items: z.array(numberOrderSchema) }) }],
   ["POST /v1/organizations/:orgId/number-orders", { 200: numberOrderSchema, 201: numberOrderSchema, 202: numberOrderSchema }],

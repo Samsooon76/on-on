@@ -20,6 +20,7 @@ export default {
     ios: {
       bundleIdentifier: variant === "demo" ? "com.onoffv2.mobile" : "com.onoffv2.mobile.dev",
       supportsTablet: true,
+      infoPlist: { EXDevMenuShowFloatingActionButton: false },
     },
     android: {
       package: variant === "demo" ? "com.onoffv2.mobile" : "com.onoffv2.mobile.dev",

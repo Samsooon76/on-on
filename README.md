@@ -22,6 +22,8 @@ Les appels et SMS sont désactivés tant que les valeurs Twilio vérifiées de l
 
 ## Documentation
 
+- [Connecteur MCP utilisateurs : fonctionnalités et activation](docs/runbooks/mcp-setup.md)
+
 - [Administration, rôles, permissions et IVR](docs/administration.md)
 
 - [Périmètre MVP](docs/mvp-scope.md)

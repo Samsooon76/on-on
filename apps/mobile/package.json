@@ -7,28 +7,33 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "start": "pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-native build && expo start --dev-client",
-    "ios": "pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-native build && expo run:ios",
-    "android": "pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-native build && expo run:android",
+    "start": "pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-native build && expo start --dev-client",
+    "ios": "pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-native build && expo run:ios",
+    "android": "pnpm --filter @onoff/api-client build && pnpm --filter @onoff/voice-contract build && pnpm --filter @onoff/voice-native build && expo run:android",
     "typecheck": "tsc --noEmit",
+    "test": "node --experimental-test-module-mocks --test test/*.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
     "@onoff/api-client": "workspace:*",
     "@onoff/voice-native": "workspace:*",
     "@supabase/supabase-js": "2.117.1",
     "@twilio/voice-react-native-sdk": "1.8.0",
     "expo": "57.0.25",
     "expo-dev-client": "57.0.19",
+    "expo-haptics": "~57.0.3",
     "expo-linking": "57.0.11",
     "expo-secure-store": "57.0.4",
     "expo-system-ui": "57.0.4",
     "react": "19.2.3",
-    "react-native": "0.86.3"
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0"
   },
   "devDependencies": {
     "@types/node": "24.10.0",
     "@types/react": "19.2.4",
+    "react-test-renderer": "19.2.3",
     "typescript": "6.0.3"
   }
 }

@@ -1,19 +1,28 @@
 import { createClient, type Session } from "@supabase/supabase-js";
 import mobilePackage from "./package.json";
-import { ApiClientError, createApiClient, getSmsSegmentInfo } from "@onoff/api-client";
+import { ApiClientError, buildInbox, createApiClient, getSmsSegmentInfo, phoneKey, type ApiPage, type CallRecord, type Contact, type Conversation, type InboxConversation } from "@onoff/api-client";
 import { createNativeVoiceClient, type NativeAudioRoute, type NativeVoiceClient } from "@onoff/voice-native";
 import * as SecureStore from "expo-secure-store";
 import * as Linking from "expo-linking";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
+import { Dialer } from "./src/Dialer";
+import { ConversationInbox, ConversationThread } from "./src/Conversations";
+import { mergeRecords } from "./src/conversation-model";
+import { useConversationHistory } from "./src/useConversationHistory";
+import { callStatusLabel, isDialableNumber, isMissedCall, normalizePhone, relativeCallDate } from "./src/phone";
+import { ActionButton, Card, Empty, Icon, IconButton, MotionPreferences, Pill, SearchField, SectionTitle, Sheet, SmallButton, Touch, feedback, palette, styles, type IconName } from "./src/ui";
 import {
   ActivityIndicator,
+  Alert,
   AppState,
+  FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StatusBar,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -33,20 +42,16 @@ const supabase = supabaseUrl && supabaseKey
     })
   : null;
 
-type Tab = "calls" | "contacts" | "messages" | "settings";
+type Tab = "calls" | "contacts" | "conversations" | "settings";
 type Organization = { organization_id: string; role: "admin" | "member"; organizations: { id: string; name: string } | null };
 type LineAssignment = { can_voice: boolean; can_sms: boolean; status?: string; lines: { id: string; organization_id: string; phone_number: string; voice_enabled: boolean; sms_enabled: boolean } | null };
-type Contact = { id: string; display_name: string; email: string | null; version: number; contact_phones: { id: string; phone_number: string; label: string }[] };
-type CallRecord = { id: string; direction: "inbound" | "outbound"; remote_number: string; remoteContactName: string | null; status: string; created_at: string; duration_seconds: number | null };
-type Message = { id: string; direction: "inbound" | "outbound"; body: string; status: string; provider_error_code: string | null; created_at: string; sent_at: string | null; delivered_at: string | null };
-type Conversation = { id: string; lineId: string; remoteNumber: string; remoteContactName: string | null; lastMessageAt: string | null; lastMessage: { id: string; body: string; direction: string; status: string; created_at: string } | null; unread: boolean };
 type DeviceRecord = { id: string; organization_id: string; platform: string; label: string; status: string; last_active_at: string | null; created_at: string };
 type VoiceDiagnosticEvent = "voice_registration_failed" | "history_refresh_succeeded" | "history_refresh_failed";
-const tabs: { id: Tab; label: string; icon: string }[] = [
-  { id: "calls", label: "Appels", icon: "⌕" },
-  { id: "contacts", label: "Contacts", icon: "♙" },
-  { id: "messages", label: "Messages", icon: "▤" },
-  { id: "settings", label: "Réglages", icon: "⚙" },
+const tabs: { id: Tab; label: string; icon: IconName; activeIcon: IconName }[] = [
+  { id: "conversations", label: "Conversations", icon: "chatbubbles-outline", activeIcon: "chatbubbles" },
+  { id: "calls", label: "Appels", icon: "call-outline", activeIcon: "call" },
+  { id: "contacts", label: "Contacts", icon: "people-outline", activeIcon: "people" },
+  { id: "settings", label: "Réglages", icon: "settings-outline", activeIcon: "settings" },
 ];
 const voiceRegistrationRefreshMs = 50 * 60 * 1000;
 
@@ -55,20 +60,16 @@ function actionKey(): string {
   return bytes.join("");
 }
 
-function normalizePhone(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("+")) return `+${trimmed.slice(1).replace(/\D/g, "")}`;
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.startsWith("00")) return `+${digits.slice(2)}`;
-  if (digits.startsWith("0")) return `+32${digits.slice(1)}`;
-  return digits ? `+32${digits}` : "";
-}
-
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : "Une erreur inattendue est survenue.";
 }
 
 export default function App() {
+  return <SafeAreaProvider initialMetrics={initialWindowMetrics}><MotionPreferences><MobileApp /></MotionPreferences></SafeAreaProvider>;
+}
+
+function MobileApp() {
+  const insets = useSafeAreaInsets();
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [email, setEmail] = useState("");
@@ -90,13 +91,15 @@ export default function App() {
   const [contactEmail, setContactEmail] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [inboxCursors, setInboxCursors] = useState<{ calls: string | null; conversations: string | null }>({ calls: null, conversations: null });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [recipientEditable, setRecipientEditable] = useState(false);
   const [messageDestination, setMessageDestination] = useState("");
   const [messageBody, setMessageBody] = useState("");
   const [pendingSmsAttempt, setPendingSmsAttempt] = useState<{ signature: string; key: string } | null>(null);
   const [smsRecoveryState, setSmsRecoveryState] = useState<"checking" | "ready" | "unavailable">("checking");
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
-  const [activeTab, setActiveTab] = useState<Tab>("calls");
+  const [activeTab, setActiveTab] = useState<Tab>("conversations");
   const [destination, setDestination] = useState("");
   const [voiceStatus, setVoiceStatus] = useState("Ligne inactive");
   const [callStatus, setCallStatus] = useState<"idle" | "connecting" | "ringing" | "active" | "reconnecting">("idle");
@@ -106,13 +109,19 @@ export default function App() {
   const [audioDevices, setAudioDevices] = useState<NativeAudioRoute[]>([]);
   const [selectedAudioDevice, setSelectedAudioDevice] = useState("");
   const [keypadVisible, setKeypadVisible] = useState(false);
+  const [dialerVisible, setDialerVisible] = useState(false);
+  const [contactFormVisible, setContactFormVisible] = useState(false);
+  const [messageComposerVisible, setMessageComposerVisible] = useState(false);
+  const [callSearch, setCallSearch] = useState("");
+  const [callFilter, setCallFilter] = useState<"all" | "missed">("all");
+  const [refreshing, setRefreshing] = useState(false);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const contactSearchRef = useRef(contactSearch);
+  contactSearchRef.current = contactSearch;
   const voiceRef = useRef<NativeVoiceClient | null>(null);
-  const activeTabRef = useRef(activeTab);
-  const selectedConversationIdRef = useRef(selectedConversationId);
-  activeTabRef.current = activeTab;
-  selectedConversationIdRef.current = selectedConversationId;
   const smsSegmentInfo = getSmsSegmentInfo(messageBody.trim());
-  const selectedConversationContactName = conversations.find((conversation) => conversation.id === selectedConversationId)?.remoteContactName ?? null;
   const duplicateContact = normalizePhone(contactPhone)
     ? contacts.find((contact) => contact.contact_phones.some((phone) => phone.phone_number === normalizePhone(contactPhone)))
     : undefined;
@@ -132,6 +141,18 @@ export default function App() {
     if (!apiBase) throw new Error("Configurez EXPO_PUBLIC_API_BASE_URL dans apps/mobile/.env.");
     return apiClient.request<T>(path, init);
   }, [apiClient]);
+  const inbox = useMemo(() => buildInbox(selectedLineId, conversations, calls), [selectedLineId, conversations, calls]);
+  const selectedThread = inbox.find((thread) => phoneKey(thread.remoteNumber) === phoneKey(normalizePhone(messageDestination)));
+  const matchingContacts = contacts.filter((contact) => contact.contact_phones.some((phone) => phoneKey(phone.phone_number) === phoneKey(normalizePhone(messageDestination))));
+  const selectedConversationContactName = selectedThread?.name ?? (matchingContacts.length === 1 ? matchingContacts[0]?.display_name : null);
+  const markConversationRead = useCallback((id: string) => {
+    setConversations((current) => current.map((conversation) => conversation.id === id ? { ...conversation, unread: false } : conversation));
+  }, []);
+  const history = useConversationHistory(api, selectedLineId, selectedConversationId, activeTab === "conversations" && messageComposerVisible, markConversationRead);
+  const historyRefreshRef = useRef(history.refresh);
+  historyRefreshRef.current = history.refresh;
+  const workspaceRequestRef = useRef(0);
+  const loadedLineRef = useRef("");
   const reportVoiceDiagnostic = useCallback(async (event: VoiceDiagnosticEvent, durationMs?: number): Promise<void> => {
     try {
       await api("/v1/diagnostics/voice", {
@@ -145,34 +166,51 @@ export default function App() {
 
   const refreshWorkspace = useCallback(async (orgId: string, preferredLineId?: string) => {
     if (!orgId) return;
+    const request = ++workspaceRequestRef.current;
+    const context = { ...workspaceContextRef.current };
+    const isCurrent = () => request === workspaceRequestRef.current && context.organizationId === workspaceContextRef.current.organizationId && context.lineId === workspaceContextRef.current.lineId;
+    const query = contactSearchRef.current;
     const [lineResponse, contactResponse, deviceResponse] = await Promise.all([
       api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`),
-      api<{ items: Contact[] }>(`/v1/organizations/${orgId}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`),
+      api<{ items: Contact[] }>(`/v1/organizations/${orgId}/contacts?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}`),
       api<{ items: DeviceRecord[] }>("/v1/devices"),
     ]);
+    if (!isCurrent()) return;
     setLines(lineResponse.items);
-    setContacts(contactResponse.items);
+    if (query === contactSearchRef.current) setContacts(contactResponse.items);
     setDevices(deviceResponse.items);
     const target = lineResponse.items.find((item) => item.lines?.id === (preferredLineId ?? selectedLineId))
       ?? lineResponse.items.find((item) => item.lines);
     const targetLineId = target?.lines?.id ?? "";
+    if (targetLineId !== context.lineId) {
+      loadedLineRef.current = "";
+      setCalls([]);
+      setConversations([]);
+      setInboxCursors({ calls: null, conversations: null });
+      setSelectedConversationId("");
+      setMessageComposerVisible(false);
+    }
     setSelectedLineId(targetLineId);
     if (!targetLineId) {
+      loadedLineRef.current = "";
+      setInboxCursors({ calls: null, conversations: null });
       setCalls([]);
       setConversations([]);
       setSelectedConversationId("");
+      setMessageComposerVisible(false);
       return;
     }
     const [callResponse, conversationResponse] = await Promise.all([
-      api<{ items: CallRecord[] }>(`/v1/lines/${targetLineId}/calls?limit=50`),
-      api<{ items: Conversation[] }>(`/v1/lines/${targetLineId}/conversations?limit=50`),
+      api<ApiPage<CallRecord>>(`/v1/lines/${targetLineId}/calls?limit=50`),
+      api<ApiPage<Conversation>>(`/v1/lines/${targetLineId}/conversations?limit=50`),
     ]);
-    setCalls(callResponse.items);
-    setConversations(conversationResponse.items);
-    setSelectedConversationId((current) => conversationResponse.items.some((item) => item.id === current)
-      ? current
-      : conversationResponse.items[0]?.id ?? "");
-  }, [api, contactSearch, selectedLineId]);
+    if (request !== workspaceRequestRef.current || orgId !== workspaceContextRef.current.organizationId || (workspaceContextRef.current.lineId && targetLineId !== workspaceContextRef.current.lineId)) return;
+    const sameLine = loadedLineRef.current === targetLineId;
+    loadedLineRef.current = targetLineId;
+    setCalls((current) => sameLine ? mergeRecords(current, callResponse.items) : callResponse.items);
+    setConversations((current) => sameLine ? mergeRecords(current, conversationResponse.items) : conversationResponse.items);
+    if (!sameLine) setInboxCursors({ calls: callResponse.nextCursor, conversations: conversationResponse.nextCursor });
+  }, [api, selectedLineId]);
 
   async function restorePendingSmsAttempt(isCurrent: () => boolean = () => true): Promise<void> {
     const { items } = await api<{ items: Array<{ message_id: string; organization_id: string; conversation_id: string; line_id: string; destination: string; body: string; idempotency_key: string }> }>("/v1/messages/pending");
@@ -188,7 +226,8 @@ export default function App() {
     if (!isCurrent()) return;
     setSelectedLineId(pending.line_id);
     setSelectedConversationId(pending.conversation_id);
-    setActiveTab("messages");
+    setActiveTab("conversations");
+    setMessageComposerVisible(true);
     setNotice("Un SMS précédent attend une vérification. Reprenez-la avant tout nouvel envoi.");
   }
 
@@ -244,18 +283,32 @@ export default function App() {
       setSession(nextSession);
       if (event === "PASSWORD_RECOVERY") setRecoveringPassword(true);
       if (previousUserId && previousUserId !== nextSession?.user.id) {
+        loadedLineRef.current = "";
+        workspaceRequestRef.current += 1;
+        setInboxCursors({ calls: null, conversations: null });
+        setLoadingMore(false);
         setOrganizations([]);
         setLines([]);
         setContacts([]);
         setCalls([]);
         setConversations([]);
-        setMessages([]);
         setDevices([]);
         setSelectedOrg("");
         setSelectedLineId("");
         setSelectedConversationId("");
         setPendingSmsAttempt(null);
         setSmsRecoveryState("checking");
+        setDialerVisible(false);
+        setContactFormVisible(false);
+        setMessageComposerVisible(false);
+        setDestination("");
+        setMessageDestination("");
+        setMessageBody("");
+        setContactSearch("");
+        setContactName("");
+        setContactPhone("");
+        setContactEmail("");
+        setCallSearch("");
       }
     });
     return () => auth.subscription.unsubscribe();
@@ -351,6 +404,7 @@ export default function App() {
       return;
     }
     let cancelled = false;
+    setWorkspaceLoading(true);
     setSmsRecoveryState("checking");
     void (async () => {
       const { items } = await api<{ items: Organization[] }>("/v1/organizations");
@@ -367,7 +421,7 @@ export default function App() {
       if (cancelled) return;
       setSmsRecoveryState("unavailable");
       setNotice("Les SMS à vérifier ne sont pas disponibles. Vérifiez la connexion puis réessayez.");
-    });
+    }).finally(() => { if (!cancelled) setWorkspaceLoading(false); });
     return () => { cancelled = true; };
   // Load organizations whenever the authenticated identity changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -380,23 +434,40 @@ export default function App() {
   }, [authToken, selectedOrg]);
 
   useEffect(() => {
-    if (!authToken || !selectedLineId || !selectedConversationId || activeTab !== "messages") {
-      setMessages([]);
-      return;
+    if (messageComposerVisible && selectedThread?.smsConversationId && !selectedConversationId) {
+      setSelectedConversationId(selectedThread.smsConversationId);
     }
-    let cancelled = false;
-    void api<{ items: Message[] }>(`/v1/conversations/${selectedConversationId}/messages?limit=50`)
-      .then(({ items }) => {
-        if (cancelled) return;
-        setMessages(items);
-        const last = items[items.length - 1];
-        if (last) void api(`/v1/conversations/${selectedConversationId}/read`, { method: "PUT", body: JSON.stringify({ lastReadMessageId: last.id }) })
-          .then(() => { if (!cancelled) setConversations((current) => current.map((conversation) => conversation.id === selectedConversationId ? { ...conversation, unread: false } : conversation)); })
-          .catch(() => undefined);
-      })
-      .catch((error: unknown) => { if (!cancelled) setNotice(friendlyError(error)); });
-    return () => { cancelled = true; };
-  }, [activeTab, api, authToken, selectedConversationId, selectedLineId]);
+  }, [messageComposerVisible, selectedThread?.smsConversationId, selectedConversationId]);
+
+  useEffect(() => {
+    if (!authToken || !selectedOrg || !selectedLineId) return;
+    void refreshWorkspace(selectedOrg, selectedLineId).catch((error: unknown) => setNotice(friendlyError(error)));
+  // Reload the selected line immediately, even when no realtime event is emitted.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLineId]);
+
+  useEffect(() => {
+    if (!authToken || !selectedOrg) return;
+    const controller = new AbortController();
+    setContactsLoading(true);
+    const timer = setTimeout(() => {
+      void api<{ items: Contact[] }>(`/v1/organizations/${selectedOrg}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`, { signal: controller.signal })
+        .then(({ items }) => { if (!controller.signal.aborted) setContacts(items); })
+        .catch((error: unknown) => { if (!controller.signal.aborted) setNotice(friendlyError(error)); })
+        .finally(() => { if (!controller.signal.aborted) setContactsLoading(false); });
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [api, authToken, selectedOrg, contactSearch]);
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
+  useEffect(() => {
+    if (callStatus !== "idle") { setDialerVisible(false); setContactFormVisible(false); }
+  }, [callStatus]);
 
   useEffect(() => {
     if (!authToken || !selectedOrg || !selectedLineId || !supabase) return;
@@ -406,40 +477,24 @@ export default function App() {
       if (cancelled || refreshTimer) return;
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        void refreshWorkspace(selectedOrg, selectedLineId).catch((error: unknown) => setNotice(friendlyError(error)));
+        void refreshWorkspace(selectedOrg, selectedLineId).then(() => { if (!cancelled) return historyRefreshRef.current(); }).catch((error: unknown) => setNotice(friendlyError(error)));
       }, 150);
     };
     const refreshFromEvent = (payload: unknown) => {
       if (cancelled || !payload || typeof payload !== "object") return;
-      const kind = (payload as { kind?: unknown }).kind;
+      const event = (payload as { payload?: unknown }).payload ?? payload;
+      if (!event || typeof event !== "object") return;
+      const kind = (event as { kind?: unknown }).kind;
       const reportError = (error: unknown) => { if (!cancelled) setNotice(friendlyError(error)); };
       if (kind === "contact") {
-        void api<{ items: Contact[] }>(`/v1/organizations/${selectedOrg}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`)
-          .then(({ items }) => { if (!cancelled) setContacts(items); }).catch(reportError);
+        const query = contactSearchRef.current;
+        void api<{ items: Contact[] }>(`/v1/organizations/${selectedOrg}/contacts?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}`)
+          .then(({ items }) => { if (!cancelled && query === contactSearchRef.current) setContacts(items); }).catch(reportError);
       } else if (kind === "device") {
         void api<{ items: DeviceRecord[] }>("/v1/devices")
           .then(({ items }) => { if (!cancelled) setDevices(items); }).catch(reportError);
-      } else if (kind === "call") {
-        void api<{ items: CallRecord[] }>(`/v1/lines/${selectedLineId}/calls?limit=50`)
-          .then(({ items }) => { if (!cancelled) setCalls(items); }).catch(reportError);
-      } else if (kind === "message") {
-        void api<{ items: Conversation[] }>(`/v1/lines/${selectedLineId}/conversations?limit=50`)
-          .then(({ items }) => { if (!cancelled) setConversations(items); }).catch(reportError);
-        const conversationId = selectedConversationIdRef.current;
-        if (conversationId) {
-          void api<{ items: Message[] }>(`/v1/conversations/${conversationId}/messages?limit=50`)
-            .then(async ({ items }) => {
-              if (cancelled) return;
-              setMessages(items);
-              if (activeTabRef.current === "messages") {
-                const last = items.at(-1);
-                if (last) {
-                  await api(`/v1/conversations/${conversationId}/read`, { method: "PUT", body: JSON.stringify({ lastReadMessageId: last.id }) });
-                  if (!cancelled) setConversations((current) => current.map((conversation) => conversation.id === conversationId ? { ...conversation, unread: false } : conversation));
-                }
-              }
-            }).catch(reportError);
-        }
+      } else if (kind === "call" || kind === "message") {
+        refresh();
       }
     };
     void supabase.realtime.setAuth(authToken);
@@ -464,7 +519,7 @@ export default function App() {
       for (const channel of channels) void supabase.removeChannel(channel);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, selectedOrg, selectedLineId, contactSearch, selectedConversationId]);
+  }, [authToken, selectedOrg, selectedLineId]);
 
   useEffect(() => {
     if (!authToken || !selectedOrg || !activeLine?.id || activeLine.organization_id !== selectedOrg || !activeAssignment?.can_voice || !activeLine.voice_enabled) {
@@ -643,9 +698,10 @@ export default function App() {
     }
   }
 
-  async function startCall() {
-    const normalized = normalizePhone(destination);
-    if (!activeLine || !activeAssignment?.can_voice || !deviceRef.current || !normalized) {
+  async function startCall(number = destination) {
+    const normalized = normalizePhone(number);
+    if (busy || callStatus !== "idle") return;
+    if (!activeLine?.voice_enabled || !activeAssignment?.can_voice || !deviceRef.current || !isDialableNumber(number)) {
       setNotice("Choisissez une ligne vocale et un numéro au format international.");
       return;
     }
@@ -668,6 +724,8 @@ export default function App() {
       await voiceRef.current.startCall({ destination: normalized, intentId: intent.id });
       unusedIntentId = null;
       setDestination(normalized);
+      setDialerVisible(false);
+      if (activeTab !== "conversations") setActiveTab("calls");
     } catch (error) {
       if (unusedIntentId) {
         try { await api(`/v1/call-intents/${unusedIntentId}/cancel`, { method: "POST" }); } catch { /* Server expiry remains the fallback. */ }
@@ -711,6 +769,7 @@ export default function App() {
       setContactName("");
       setContactPhone("");
       setContactEmail("");
+      setContactFormVisible(false);
       await refreshWorkspace(selectedOrg, selectedLineId);
     } catch (error) {
       setNotice(friendlyError(error));
@@ -737,8 +796,8 @@ export default function App() {
       setNotice("Cette ligne n’a pas de permission SMS.");
       return;
     }
-    const normalized = normalizePhone(messageDestination || (conversations.find((item) => item.id === selectedConversationId)?.remoteNumber ?? ""));
-    if (!normalized || !messageBody.trim()) {
+    const normalized = normalizePhone(messageDestination);
+    if (!isDialableNumber(messageDestination) || !messageBody.trim()) {
       setNotice("Saisissez un numéro international et un message.");
       return;
     }
@@ -767,6 +826,7 @@ export default function App() {
     }
     setMessageDestination(normalized);
     setSelectedConversationId(result.conversationId);
+    setRecipientEditable(false);
     if (!result.submissionConfirmed && (result.status === "unknown" || result.status === "submitting")) {
       setNotice("L’envoi est en cours de vérification. Réessayez avec le même contenu pour lire son état, sans le renvoyer.");
     } else if (result.status === "failed" || result.status === "undelivered") {
@@ -779,8 +839,7 @@ export default function App() {
     }
     try {
       await refreshWorkspace(selectedOrg, selectedLineId);
-      const refreshed = await api<{ items: Message[] }>(`/v1/conversations/${result.conversationId}/messages?limit=50`);
-      setMessages(refreshed.items);
+      await historyRefreshRef.current();
     } catch { /* Keep the send result visible; the next refresh will reload persisted data. */ }
     setBusy(false);
   }
@@ -822,14 +881,24 @@ export default function App() {
     setLines([]);
     setSelectedLineId("");
     setContacts([]);
+    loadedLineRef.current = "";
+    workspaceRequestRef.current += 1;
+    setInboxCursors({ calls: null, conversations: null });
+    setLoadingMore(false);
     setCalls([]);
     setConversations([]);
     setSelectedConversationId("");
-    setMessages([]);
     setDevices([]);
     setDestination("");
     setMessageDestination("");
     setMessageBody("");
+    setMessageComposerVisible(false);
+    setDialerVisible(false);
+    setContactSearch("");
+    setContactFormVisible(false);
+    setContactName("");
+    setContactPhone("");
+    setContactEmail("");
     setSelectedOrg(organizationId);
   }
 
@@ -847,176 +916,249 @@ export default function App() {
       return;
     }
     if (lineId === selectedLineId) return;
+    loadedLineRef.current = "";
+    workspaceRequestRef.current += 1;
+    setInboxCursors({ calls: null, conversations: null });
+    setLoadingMore(false);
     setCalls([]);
     setConversations([]);
     setSelectedConversationId("");
-    setMessages([]);
+    setMessageComposerVisible(false);
+    setMessageDestination("");
+    setMessageBody("");
+    setDialerVisible(false);
     setSelectedLineId(lineId);
+  }
+
+  const visibleCalls = useMemo(() => {
+    const query = callSearch.trim().toLocaleLowerCase();
+    return calls.filter((call) => (callFilter === "all" || isMissedCall(call)) && (!query || `${call.remoteContactName ?? ""} ${call.remote_number}`.toLocaleLowerCase().includes(query))).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }, [calls, callSearch, callFilter]);
+  const missedCount = calls.filter(isMissedCall).length;
+  const unreadCount = conversations.filter((conversation) => conversation.unread).length;
+  const canCall = Boolean(activeLine?.voice_enabled && activeAssignment?.can_voice && callStatus === "idle");
+  const callUnavailableReason = !activeLine ? "Une ligne doit vous être attribuée pour passer un appel." : callStatus !== "idle" ? "Terminez l’appel en cours pour en lancer un autre." : "Les appels sont désactivés sur cette ligne. Contactez votre administrateur.";
+  const smsLocked = Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready";
+
+  function openDialer(number?: string) {
+    Keyboard.dismiss();
+    if (callStatus !== "idle") { setKeypadVisible((value) => !value); return; }
+    if (number !== undefined) setDestination(number);
+    setNotice("");
+    feedback();
+    setDialerVisible(true);
+  }
+
+  function changeTab(tab: Tab) {
+    Keyboard.dismiss();
+    if (tab !== activeTab) feedback();
+    setActiveTab(tab);
+  }
+
+  async function refreshCurrentWorkspace() {
+    if (refreshing || !selectedOrg) return;
+    setRefreshing(true);
+    try { await refreshWorkspace(selectedOrg, selectedLineId); await historyRefreshRef.current(); }
+    catch (error) { setNotice(friendlyError(error)); }
+    finally { setRefreshing(false); }
+  }
+
+  async function loadMoreInbox() {
+    if (loadingMore || refreshing || !selectedLineId) return;
+    const lineId = selectedLineId;
+    const request = workspaceRequestRef.current;
+    setLoadingMore(true);
+    try {
+      const [callPage, conversationPage] = await Promise.all([
+        inboxCursors.calls ? api<ApiPage<CallRecord>>(`/v1/lines/${lineId}/calls?limit=50&cursor=${encodeURIComponent(inboxCursors.calls)}`) : null,
+        inboxCursors.conversations ? api<ApiPage<Conversation>>(`/v1/lines/${lineId}/conversations?limit=50&cursor=${encodeURIComponent(inboxCursors.conversations)}`) : null,
+      ]);
+      if (lineId !== workspaceContextRef.current.lineId || request !== workspaceRequestRef.current) return;
+      if (callPage) setCalls((current) => mergeRecords(callPage.items, current));
+      if (conversationPage) setConversations((current) => mergeRecords(conversationPage.items, current));
+      setInboxCursors({ calls: callPage?.nextCursor ?? null, conversations: conversationPage?.nextCursor ?? null });
+    } catch (error) { if (lineId === workspaceContextRef.current.lineId) setNotice(friendlyError(error)); }
+    finally { if (lineId === workspaceContextRef.current.lineId) setLoadingMore(false); }
+  }
+
+  function newMessage(number = "") {
+    const thread = inbox.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalizePhone(number)));
+    openConversation(thread ?? { remoteNumber: number, smsConversationId: null }, !number);
+  }
+
+  function openConversation(conversation: Pick<InboxConversation, "remoteNumber" | "smsConversationId">, editable = false) {
+    if (smsLocked) {
+      setActiveTab("conversations");
+      if (pendingSmsAttempt) setMessageComposerVisible(true);
+      else setNotice("Attendez la vérification des envois précédents avant d’ouvrir une conversation.");
+      return;
+    }
+    const sameRecipient = Boolean(conversation.remoteNumber) && phoneKey(normalizePhone(messageDestination)) === phoneKey(normalizePhone(conversation.remoteNumber));
+    const open = () => {
+      if (!sameRecipient) setMessageBody("");
+      setSelectedConversationId(conversation.smsConversationId ?? "");
+      setMessageDestination(conversation.remoteNumber);
+      setRecipientEditable(editable);
+      setNotice("");
+      setMessageComposerVisible(true);
+      setActiveTab("conversations");
+      feedback();
+    };
+    if (messageBody.trim() && !sameRecipient) {
+      Alert.alert("Changer de conversation ?", "Le brouillon actuel sera remplacé.", [
+        { text: "Garder le brouillon", style: "cancel", onPress: () => { setActiveTab("conversations"); setMessageComposerVisible(true); } },
+        { text: "Ouvrir la conversation", onPress: open },
+      ]);
+    } else open();
+  }
+
+  function changeMessageDestination(number: string) {
+    setMessageDestination(number);
+    const thread = inbox.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalizePhone(number)));
+    setSelectedConversationId(thread?.smsConversationId ?? "");
+  }
+
+  const loading = <View style={{ padding: 40, alignItems: "center", gap: 12 }}><ActivityIndicator color={palette.accent} /><Text style={styles.rowMeta}>Chargement de votre espace…</Text></View>;
+  const lineOverview = <Touch accessibilityLabel="Voir les réglages de votre ligne" style={styles.lineOverview} onPress={() => changeTab("settings")}>
+    <View style={styles.lineIcon}><Icon name="phone-portrait-outline" color={palette.accent} /></View>
+    <View style={styles.rowCopy}><Text style={styles.lineLabel}>{activeLine ? "Votre ligne professionnelle" : "Votre espace professionnel"}</Text><Text style={styles.lineNumber}>{activeLine?.phone_number ?? "Aucune ligne attribuée"}</Text></View>
+    <Icon name="chevron-forward" size={17} color={palette.muted} />
+  </Touch>;
+
+  function renderTab(tab: typeof tabs[number]) {
+    const selected = activeTab === tab.id;
+    return <Touch key={tab.id} accessibilityRole="tab" accessibilityLabel={tab.label} accessibilityState={{ selected }} onPress={() => changeTab(tab.id)} style={styles.tab}>
+      <View style={styles.tabIcon}><Icon name={tab.icon} size={21} color={selected ? palette.accent : palette.muted} /></View>
+      {tab.id === "conversations" && unreadCount > 0 && <View style={styles.badge}><Text style={styles.badgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text></View>}
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9} style={[styles.tabLabel, selected && styles.tabActive]}>{tab.label}</Text>
+    </Touch>;
   }
 
   if (!authReady) return <View style={styles.center}><ActivityIndicator color={palette.accent} /><Text style={styles.muted}>Ouverture de votre espace…</Text></View>;
   if (!session || recoveringPassword) {
-    return (
-      <KeyboardAvoidingView style={styles.authScreen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <StatusBar barStyle="dark-content" />
+    return <SafeAreaView style={styles.authScreen}><KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <StatusBar barStyle="dark-content" />
+      <ScrollView contentContainerStyle={styles.authContent} keyboardShouldPersistTaps="handled">
         <View style={styles.authCard}>
           <View style={styles.brandMark}><Text style={styles.brandLetter}>o</Text></View>
-          <Text style={styles.eyebrow}>ONOFF BUSINESS</Text>
+          <Text style={styles.headerBrand}>ONOFF BUSINESS</Text>
           <Text style={styles.title}>{recoveringPassword ? "Nouveau mot de passe" : "Bienvenue"}</Text>
-          <Text style={styles.body}>{recoveringPassword ? "Choisissez un mot de passe pour votre compte." : "Connectez-vous à votre espace téléphonique."}</Text>
-          {!recoveringPassword && <><TextInput style={styles.input} placeholder="Adresse e-mail" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} /><TextInput style={styles.input} placeholder="Mot de passe" secureTextEntry value={password} onChangeText={setPassword} /></>}
-          {recoveringPassword && <TextInput style={styles.input} placeholder="Nouveau mot de passe" secureTextEntry value={newPassword} onChangeText={setNewPassword} />}
-          {!!authError && <Text accessibilityRole="alert" style={styles.noticeText}>{authError}</Text>}
-          <ActionButton label={recoveringPassword ? "Mettre à jour" : "Se connecter"} onPress={() => void (recoveringPassword ? updatePassword() : signIn())} disabled={busy} />
-          {!recoveringPassword && <ActionButton label="Mot de passe oublié ?" quiet onPress={() => void requestPasswordRecovery()} />}
+          <Text style={styles.body}>{recoveringPassword ? "Choisissez un mot de passe pour votre compte." : "Vos appels, vos messages et votre équipe. Tout simplement."}</Text>
+          {!recoveringPassword && <>
+            <TextInput accessibilityLabel="Adresse e-mail" style={styles.input} placeholder="Adresse e-mail" placeholderTextColor={palette.muted} autoCapitalize="none" autoComplete="email" keyboardType="email-address" value={email} onChangeText={setEmail} />
+            <TextInput accessibilityLabel="Mot de passe" style={styles.input} placeholder="Mot de passe" placeholderTextColor={palette.muted} secureTextEntry autoComplete="current-password" value={password} onChangeText={setPassword} returnKeyType="go" onSubmitEditing={() => { if (!busy) void signIn(); }} />
+          </>}
+          {recoveringPassword && <TextInput accessibilityLabel="Nouveau mot de passe" style={styles.input} placeholder="Nouveau mot de passe" secureTextEntry value={newPassword} onChangeText={setNewPassword} />}
+          {!!authError && <Text accessibilityRole="alert" style={[styles.hint, { color: palette.red, marginBottom: 12 }]}>{authError}</Text>}
+          <ActionButton label={recoveringPassword ? "Mettre à jour" : "Se connecter"} icon="arrow-forward" loading={busy} onPress={() => void (recoveringPassword ? updatePassword() : signIn())} />
+          {!recoveringPassword && <Touch style={styles.textButton} onPress={() => void requestPasswordRecovery()}><Text style={styles.textButtonLabel}>Mot de passe oublié ?</Text></Touch>}
           {recoveringPassword && <ActionButton label="Retour à la connexion" quiet onPress={() => setRecoveringPassword(false)} />}
-          {!supabase && <Text style={styles.noticeText}>Configurez les variables publiques dans apps/mobile/.env.</Text>}
+          {!supabase && <Text style={styles.hint}>La connexion n’est pas encore configurée sur cet appareil.</Text>}
         </View>
-      </KeyboardAvoidingView>
-    );
+      </ScrollView>
+    </KeyboardAvoidingView></SafeAreaView>;
   }
 
-  const tabTitle = tabs.find((tab) => tab.id === activeTab)?.label ?? "Onoff";
-  return (
-    <View style={styles.app}>
-      <StatusBar barStyle="dark-content" />
-      <View style={styles.header}>
-        <View><Text style={styles.eyebrow}>ONOFF BUSINESS</Text><Text style={styles.headerTitle}>{tabTitle}</Text></View>
-        <View style={styles.avatar}><Text style={styles.avatarText}>{session.user.email?.slice(0, 1).toUpperCase() ?? "O"}</Text></View>
+  const isThread = activeTab === "conversations" && messageComposerVisible;
+  const tabTitle = isThread ? (selectedConversationContactName ?? (messageDestination || "Nouvelle conversation")) : tabs.find((tab) => tab.id === activeTab)?.label ?? "Onoff";
+  return <SafeAreaView style={styles.app} edges={["top", "left", "right"]}>
+    <StatusBar barStyle="dark-content" />
+    <View style={styles.header}>
+      {isThread && <IconButton icon="chevron-back" label="Revenir aux conversations" onPress={() => { Keyboard.dismiss(); setMessageComposerVisible(false); }} />}
+      <View style={styles.rowCopy}><Text style={styles.headerBrand}>ONOFF BUSINESS</Text><Text accessibilityRole="header" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={[styles.headerTitle, isThread && { fontSize: 19, lineHeight: 26, letterSpacing: -0.3 }]}>{tabTitle}</Text></View>
+      <View style={styles.headerActions}>
+        {isThread && <IconButton icon="call-outline" label="Appeler cet interlocuteur" tone="accent" disabled={!canCall || busy || !isDialableNumber(messageDestination)} onPress={() => openDialer(messageDestination)} />}
+        {activeTab === "contacts" && <IconButton icon="add" label="Ajouter un contact" tone="accent" onPress={() => { setNotice(""); setContactFormVisible(true); }} />}
+        {activeTab === "conversations" && !isThread && <IconButton icon="create-outline" label="Nouvelle conversation" tone="accent" onPress={() => newMessage()} disabled={smsLocked} />}
+        {!isThread && activeTab !== "contacts" && <Touch style={styles.avatar} accessibilityLabel="Ouvrir les réglages du compte" onPress={() => changeTab("settings")}><View style={styles.avatarInitial}><Text style={styles.avatarText}>{session.user.email?.slice(0, 1).toUpperCase() ?? "O"}</Text></View></Touch>}
       </View>
-      <View style={styles.selectors}>
-        {organizations.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pills}>{organizations.filter((item) => item.organizations).map((item) => <Pill key={item.organization_id} selected={selectedOrg === item.organization_id} disabled={callStatus !== "idle" || Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} label={item.organizations?.name ?? "Organisation"} onPress={() => selectOrganization(item.organization_id)} />)}</ScrollView>}
-        {!!activeLine && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pills}>{lines.filter((item) => item.lines).map((item) => <Pill key={item.lines?.id} selected={selectedLineId === item.lines?.id} disabled={callStatus !== "idle" || Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} label={item.lines?.phone_number ?? "Ligne"} onPress={() => selectLine(item.lines?.id ?? "")} />)}</ScrollView>}
-      </View>
-      {!!notice && <Pressable onPress={() => setNotice("")} style={styles.notice}><Text style={styles.noticeText}>{notice}</Text><Text style={styles.noticeClose}>×</Text></Pressable>}
-      {callStatus !== "idle" && <View style={styles.callBanner}>
-        <View>
-          <Text style={styles.callBannerTitle}>{incomingNumber ? `Appel de ${incomingNumber}` : callStatus === "active" ? "Appel en cours" : callStatus === "reconnecting" ? "Reconnexion" : callStatus === "connecting" ? "Connexion en cours" : "Appel en cours de connexion"}</Text>
-          <Text style={styles.callBannerMeta}>{voiceStatus}{selectedAudioDevice ? ` · ${audioDevices.find((device) => device.id === selectedAudioDevice)?.name ?? "Audio"}` : ""}</Text>
-        </View>
-        <View style={styles.actionRow}>
-          {incomingNumber
-            ? <><SmallButton label="Répondre" onPress={() => voiceRef.current?.acceptCall()} /><SmallButton label="Refuser" quiet onPress={() => voiceRef.current?.rejectCall()} /></>
-            : <>
-              <SmallButton label={muted ? "Son" : "Muet"} quiet onPress={() => voiceRef.current?.setMuted(!muted)} />
-              <SmallButton label="Clavier" quiet onPress={() => setKeypadVisible((shown) => !shown)} />
-              <SmallButton label="Audio" quiet onPress={() => void changeAudioRoute()} />
-              <SmallButton label="Raccrocher" danger onPress={() => voiceRef.current?.hangUp()} />
-            </>}
-        </View>
-        {keypadVisible && !incomingNumber && <View style={styles.keypad}>{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => <Pressable key={digit} accessibilityRole="button" accessibilityLabel={`Tonalité ${digit}`} style={styles.keypadKey} onPress={() => voiceRef.current?.sendDigits(digit)}><Text style={styles.keypadDigit}>{digit}</Text></Pressable>)}</View>}
-      </View>}
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {activeTab === "calls" && <>
-          <Card>
-            <SectionTitle eyebrow="NOUVEL APPEL" title="Composer" />
-            <TextInput style={styles.input} accessibilityLabel="Numéro à appeler" keyboardType="phone-pad" value={destination} onChangeText={setDestination} placeholder="+32 470 00 00 00" />
-            <ActionButton label={busy ? "Préparation…" : "Appeler"} onPress={() => void startCall()} disabled={busy || !activeAssignment?.can_voice || !activeLine?.voice_enabled || callStatus !== "idle"} />
-            <Text style={styles.hint}>{activeLine?.voice_enabled && activeAssignment?.can_voice ? voiceStatus : "Les appels sont désactivés pour cette ligne."}</Text>
-            {canReceiveNativeCalls && <Text style={styles.hint}>Les appels entrants arrivent via l’interface native de l’appareil.</Text>}
-          </Card>
-          <Card><SectionTitle eyebrow="ACTIVITÉ" title="Appels récents" />{calls.length ? calls.map((call) => <View style={styles.listRow} key={call.id}><View style={[styles.roundIcon, call.direction === "outbound" ? styles.purple : styles.green]}><Text style={styles.iconText}>{call.direction === "outbound" ? "↗" : "↙"}</Text></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{call.remoteContactName ?? call.remote_number}</Text><Text style={styles.rowMeta}>{call.remoteContactName ? `${call.remote_number} · ` : ""}{call.direction === "outbound" ? "Sortant" : "Entrant"} · {new Date(call.created_at).toLocaleString("fr-BE", { dateStyle: "short", timeStyle: "short" })}</Text></View><Text style={styles.status}>{call.status}</Text></View>) : <Empty title="Aucun appel pour le moment" detail="L’historique de votre ligne apparaîtra ici." />}</Card>
-        </>}
-        {activeTab === "contacts" && <>
-          <Card><SectionTitle eyebrow="CARNET PARTAGÉ" title="Nouveau contact" /><TextInput style={styles.input} placeholder="Nom du contact" value={contactName} onChangeText={setContactName} maxLength={120} /><TextInput style={styles.input} placeholder="Téléphone international" keyboardType="phone-pad" value={contactPhone} onChangeText={setContactPhone} />{duplicateContact && <Text style={styles.duplicateWarning} accessibilityRole="text">Ce numéro figure déjà chez {duplicateContact.display_name}. Vérifiez avant d’enregistrer; les contacts ne seront pas fusionnés.</Text>}<TextInput style={styles.input} placeholder="E-mail (facultatif)" keyboardType="email-address" autoCapitalize="none" value={contactEmail} onChangeText={setContactEmail} /><ActionButton label={busy ? "Enregistrement…" : "Ajouter au carnet"} onPress={() => void saveContact()} disabled={busy || !contactName.trim()} /></Card>
-          <Card><SectionTitle eyebrow={`${contacts.length} CONTACT${contacts.length === 1 ? "" : "S"}`} title="Répertoire" /><TextInput style={styles.input} placeholder="Rechercher" value={contactSearch} onChangeText={setContactSearch} /><View style={styles.actionRow}><Text style={styles.hint}>Actions rapides</Text></View>{contacts.filter((item) => item.display_name.toLowerCase().includes(contactSearch.toLowerCase())).map((contact) => <View style={styles.listRow} key={contact.id}><View style={[styles.roundIcon, styles.green]}><Text style={styles.iconText}>{contact.display_name.slice(0, 1).toUpperCase()}</Text></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{contact.display_name}</Text><Text style={styles.rowMeta}>{contact.contact_phones[0]?.phone_number ?? contact.email ?? "Aucun numéro"}</Text><View style={[styles.actionRow, { marginTop: 8 }]}>{contact.contact_phones[0]?.phone_number && <><SmallButton label="Appeler" quiet onPress={() => { setDestination(contact.contact_phones[0]!.phone_number); setActiveTab("calls"); }} /><SmallButton label="SMS" quiet onPress={() => { setMessageDestination(contact.contact_phones[0]!.phone_number); setActiveTab("messages"); }} /></>}</View></View><Pressable onPress={() => void archiveContact(contact.id)} accessibilityLabel={`Archiver ${contact.display_name}`}><Text style={styles.archive}>⌫</Text></Pressable></View>)}{!contacts.length && <Empty title="Votre carnet est prêt" detail="Ajoutez un contact pour le partager avec l’équipe." />}</Card>
-        </>}
-        {activeTab === "messages" && <>
-          {smsRecoveryState === "checking" && <Text style={styles.hint}>Vérification des SMS en cours…</Text>}
-          {smsRecoveryState === "unavailable" && <ActionButton label="Réessayer la vérification des SMS" quiet onPress={() => void retrySmsRecovery()} />}
-          <Card><SectionTitle eyebrow="MESSAGERIE" title="Conversations" />{conversations.length ? conversations.map((conversation) => <Pressable key={conversation.id} disabled={Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} style={[styles.listRow, selectedConversationId === conversation.id && styles.selectedRow]} accessibilityLabel={`${conversation.remoteContactName ?? conversation.remoteNumber}${conversation.unread ? ", non lu" : ""}`} onPress={() => { setSelectedConversationId(conversation.id); setMessageDestination(conversation.remoteNumber); }}><View style={[styles.roundIcon, styles.purple]}><Text style={styles.iconText}>▤</Text></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{conversation.remoteContactName ?? conversation.remoteNumber}</Text><Text style={styles.rowMeta} numberOfLines={1}>{conversation.remoteContactName ? `${conversation.remoteNumber} · ` : ""}{conversation.lastMessage?.body ?? "Aucun message"}</Text></View><View style={{ alignItems: "flex-end" }}>{conversation.unread && <Text style={styles.unread}>Non lu</Text>}<Text style={styles.rowMeta}>{conversation.lastMessageAt ? new Date(conversation.lastMessageAt).toLocaleDateString("fr-BE") : ""}</Text></View></Pressable>) : <Empty title="Aucune conversation" detail="Les SMS compatibles apparaîtront ici." />}</Card>
-          {!!selectedConversationId && <Card><SectionTitle eyebrow="CONVERSATION" title={selectedConversationContactName ?? (messageDestination || conversations.find((item) => item.id === selectedConversationId)?.remoteNumber || "Messages")} />{selectedConversationContactName && <Text style={styles.rowMeta}>{messageDestination}</Text>}{messages.map((message) => <View key={message.id} style={[styles.messageBubble, message.direction === "outbound" && styles.outgoingBubble]}><Text style={styles.messageText}>{message.body}</Text><Text style={styles.messageMeta}>{message.status} · {new Date(message.created_at).toLocaleTimeString("fr-BE", { hour: "2-digit", minute: "2-digit" })}</Text></View>)}<TextInput style={styles.input} editable={!pendingSmsAttempt && smsRecoveryState === "ready"} placeholder="Numéro international" keyboardType="phone-pad" value={messageDestination} onChangeText={setMessageDestination} /><TextInput style={[styles.input, styles.multiline]} editable={!pendingSmsAttempt && smsRecoveryState === "ready"} placeholder="Écrire un message" value={messageBody} onChangeText={setMessageBody} multiline maxLength={1600} /><Text style={styles.hint}>{smsSegmentInfo.encoding} · {smsSegmentInfo.characterCount} unités · {smsSegmentInfo.segments} segment{smsSegmentInfo.segments === 1 ? "" : "s"} estimé{smsSegmentInfo.segments === 1 ? "" : "s"}</Text><ActionButton label={busy ? "Vérification…" : pendingSmsAttempt ? "Vérifier l’envoi" : smsRecoveryState !== "ready" ? "Vérification…" : "Envoyer"} onPress={() => void sendMessage()} disabled={busy || smsRecoveryState !== "ready" || !messageBody.trim() || !activeAssignment?.can_sms || !activeLine?.sms_enabled} /></Card>}
-          {!selectedConversationId && <Card><SectionTitle eyebrow="NOUVEAU SMS" title="Écrire un message" />{pendingSmsAttempt && <Text style={styles.hint}>Résultat incertain : vérifiez l’envoi avec la même demande.</Text>}<TextInput style={styles.input} editable={!pendingSmsAttempt && smsRecoveryState === "ready"} placeholder="Numéro international" keyboardType="phone-pad" value={messageDestination} onChangeText={setMessageDestination} /><TextInput style={[styles.input, styles.multiline]} editable={!pendingSmsAttempt && smsRecoveryState === "ready"} placeholder="Votre message" value={messageBody} onChangeText={setMessageBody} multiline maxLength={1600} /><Text style={styles.hint}>{smsSegmentInfo.encoding} · {smsSegmentInfo.characterCount} unités · {smsSegmentInfo.segments} segment{smsSegmentInfo.segments === 1 ? "" : "s"} estimé{smsSegmentInfo.segments === 1 ? "" : "s"}</Text><ActionButton label={busy ? "Vérification…" : pendingSmsAttempt ? "Vérifier l’envoi" : smsRecoveryState !== "ready" ? "Vérification…" : "Envoyer"} onPress={() => void sendMessage()} disabled={busy || smsRecoveryState !== "ready" || !messageBody.trim() || !activeAssignment?.can_sms || !activeLine?.sms_enabled} /></Card>}
-          {!activeLine?.sms_enabled && <Text style={styles.hint}>L’envoi et la réception SMS sont désactivés sur cette ligne.</Text>}
-        </>}
-        {activeTab === "settings" && <>
-          <Card><SectionTitle eyebrow="COMPTE" title="Votre espace" /><Text style={styles.rowTitle}>{session.user.email}</Text><Text style={styles.rowMeta}>Les comptes sont créés par invitation de l’administrateur.</Text>{organizations.map((organization) => <Pill key={organization.organization_id} selected={selectedOrg === organization.organization_id} disabled={Boolean(pendingSmsAttempt) || smsRecoveryState !== "ready"} label={organization.organizations?.name ?? "Organisation"} onPress={() => selectOrganization(organization.organization_id)} />)}<ActionButton label="Se déconnecter" quiet onPress={() => void signOut()} disabled={busy || Boolean(pendingSmsAttempt)} /></Card>
-          <Card><SectionTitle eyebrow="APPAREILS" title="Vos appareils" />{devices.length ? devices.map((device) => <View style={styles.listRow} key={device.id}><View style={[styles.roundIcon, device.status === "active" ? styles.green : styles.gray]}><Text style={styles.iconText}>⌘</Text></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{device.label}</Text><Text style={styles.rowMeta}>{device.platform} · {device.status}{device.last_active_at ? ` · vu ${new Date(device.last_active_at).toLocaleDateString("fr-BE")}` : ""}</Text></View>{device.status === "active" && <Pressable onPress={() => void revokeDevice(device.id)}><Text style={styles.revoke}>Révoquer</Text></Pressable>}</View>) : <Empty title="Aucun appareil enregistré" detail="L’appareil sera ajouté à votre connexion vocale." />}</Card>
-          <Card><SectionTitle eyebrow="DIAGNOSTIC" title="Version de l’application" /><Text style={styles.rowMeta}>Onoff Mobile {mobilePackage.version}</Text></Card>
-        </>}
-      </ScrollView>
-      <View style={styles.tabBar}>{tabs.map((tab) => <Pressable key={tab.id} style={styles.tab} onPress={() => setActiveTab(tab.id)}><Text style={[styles.tabIcon, activeTab === tab.id && styles.tabActive]}>{tab.icon}</Text><Text style={[styles.tabLabel, activeTab === tab.id && styles.tabActive]}>{tab.label}</Text></Pressable>)}</View>
     </View>
-  );
+    {(organizations.length > 1 || lines.length > 1) && <View style={styles.selectors}>
+      {organizations.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pills}>{organizations.filter((item) => item.organizations).map((item) => <Pill key={item.organization_id} selected={selectedOrg === item.organization_id} disabled={callStatus !== "idle" || smsLocked} label={item.organizations?.name ?? "Organisation"} onPress={() => selectOrganization(item.organization_id)} />)}</ScrollView>}
+      {lines.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pills}>{lines.filter((item) => item.lines).map((item) => <Pill key={item.lines!.id} selected={activeLine?.id === item.lines!.id} disabled={callStatus !== "idle" || smsLocked} label={item.lines!.phone_number} onPress={() => selectLine(item.lines!.id)} />)}</ScrollView>}
+    </View>}
+    {!!notice && !dialerVisible && !contactFormVisible && <Pressable accessibilityRole="button" accessibilityLabel={`${notice}. Fermer le message`} onPress={() => setNotice("")} style={styles.notice}><Icon name="information-circle-outline" size={19} color={palette.red} /><Text accessibilityLiveRegion="polite" style={styles.noticeText}>{notice}</Text><Icon name="close" size={17} color={palette.red} /></Pressable>}
+    {callStatus !== "idle" && <View style={styles.callBanner}>
+      <View style={styles.actionRow}><Icon name="call-outline" color={palette.accent} /><View style={styles.rowCopy}><Text style={styles.callBannerTitle}>{incomingNumber ? `Appel de ${incomingNumber}` : callStatus === "active" ? "Appel en cours" : callStatus === "reconnecting" ? "Reconnexion…" : "Connexion en cours…"}</Text><Text style={styles.callBannerMeta}>{voiceStatus}{selectedAudioDevice ? ` · ${audioDevices.find((device) => device.id === selectedAudioDevice)?.name ?? "Audio"}` : ""}</Text></View></View>
+      <View style={styles.actionRow}>{incomingNumber ? <><SmallButton label="Répondre" quiet onPress={() => voiceRef.current?.acceptCall()} /><SmallButton label="Refuser" danger onPress={() => voiceRef.current?.rejectCall()} /></> : <>
+        <SmallButton label={muted ? "Réactiver le micro" : "Muet"} quiet onPress={() => voiceRef.current?.setMuted(!muted)} />
+        <SmallButton label="Clavier" quiet onPress={() => setKeypadVisible((shown) => !shown)} />
+        <SmallButton label="Audio" quiet onPress={() => void changeAudioRoute()} />
+        <SmallButton label="Raccrocher" danger onPress={() => voiceRef.current?.hangUp()} />
+      </>}</View>
+      {keypadVisible && !incomingNumber && <View style={styles.keypad}>{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => <Touch key={digit} accessibilityLabel={`Tonalité ${digit}`} style={styles.keypadKey} onPress={() => { feedback(); voiceRef.current?.sendDigits(digit); }}><Text style={styles.keypadDigit}>{digit}</Text></Touch>)}</View>}
+    </View>}
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={insets.top + (isThread ? 90 : 100)}>
+      {activeTab === "calls" && <FlatList
+        data={visibleCalls} keyExtractor={(item) => item.id} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" refreshing={refreshing} onRefresh={() => void refreshCurrentWorkspace()} initialNumToRender={12} windowSize={7}
+        ListHeaderComponent={<View style={styles.listHeader}>{lineOverview}<View style={styles.segmentBar}>{(["all", "missed"] as const).map((filter) => <Touch key={filter} accessibilityRole="tab" accessibilityState={{ selected: callFilter === filter }} onPress={() => { feedback(); setCallFilter(filter); }} style={[styles.segment, callFilter === filter && styles.segmentActive]}><Text style={[styles.segmentText, callFilter === filter && styles.segmentTextActive]}>{filter === "all" ? "Tous les appels" : `Manqués${missedCount ? ` (${missedCount})` : ""}`}</Text></Touch>)}</View>{calls.length > 0 && <SearchField placeholder="Rechercher un nom ou un numéro" value={callSearch} onChangeText={setCallSearch} />}{visibleCalls.length > 0 && <Text style={styles.listCaption}>RÉCENTS</Text>}</View>}
+        ListEmptyComponent={workspaceLoading ? loading : <Empty icon={callFilter === "missed" ? "checkmark-done-outline" : "call-outline"} title={callSearch ? "Aucun appel trouvé" : callFilter === "missed" ? "Vous n’avez rien manqué." : "Votre prochain échange\ncommence ici."} detail={callSearch ? "Essayez un autre nom ou un autre numéro." : callFilter === "missed" ? "Vos appels manqués seront regroupés ici pour les retrouver facilement." : "Composez un numéro ou retrouvez un contact. Vos appels récents apparaîtront ici."} action={callSearch ? "Effacer la recherche" : "Ouvrir le clavier"} onAction={() => callSearch ? setCallSearch("") : openDialer()} secondary="Voir mes contacts" onSecondary={() => changeTab("contacts")} />}
+        renderItem={({ item }) => <Touch accessibilityLabel={`${item.remoteContactName ?? item.remote_number}, ${isMissedCall(item) ? "appel manqué" : item.direction === "outbound" ? "appel sortant" : "appel entrant"}. Ouvrir la conversation`} style={styles.listRow} onPress={() => newMessage(item.remote_number)}>
+          <View style={[styles.roundIcon, isMissedCall(item) && styles.missedIcon]}><Icon name={isMissedCall(item) ? "call-outline" : item.direction === "outbound" ? "arrow-up-outline" : "arrow-down-outline"} color={isMissedCall(item) ? palette.red : palette.accent} size={21} /></View>
+          <View style={styles.rowCopy}><Text numberOfLines={1} style={[styles.rowTitle, isMissedCall(item) && styles.missedText]}>{item.remoteContactName ?? item.remote_number}</Text><Text numberOfLines={1} style={styles.rowMeta}>{item.direction === "outbound" ? "Sortant" : "Entrant"} · {callStatusLabel(item.status)}{item.duration_seconds ? ` · ${Math.floor(item.duration_seconds / 60)}:${String(item.duration_seconds % 60).padStart(2, "0")}` : ""}</Text></View>
+          <View style={styles.rowTrailing}><Text style={styles.rowDate}>{relativeCallDate(item.created_at)}</Text><Icon name="chevron-forward" size={17} color={palette.muted} /></View>
+        </Touch>}
+      />}
+      {activeTab === "contacts" && <FlatList
+        data={contacts} keyExtractor={(item) => item.id} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false} refreshing={refreshing} onRefresh={() => void refreshCurrentWorkspace()} initialNumToRender={12} windowSize={7}
+        ListHeaderComponent={<View style={styles.listHeader}><SearchField placeholder="Rechercher dans les contacts" value={contactSearch} onChangeText={setContactSearch} /><View style={styles.actionRow}><Text style={styles.listCaption}>{contacts.length} CONTACT{contacts.length === 1 ? "" : "S"}{contactSearch ? " TROUVÉ" + (contacts.length === 1 ? "" : "S") : ""}</Text>{contactsLoading && <ActivityIndicator size="small" color={palette.accent} />}</View></View>}
+        ListEmptyComponent={workspaceLoading || contactsLoading ? loading : <Empty icon="people-outline" title={contactSearch ? "Personne à ce nom." : "Les bonnes personnes,\nà portée de main."} detail={contactSearch ? "Essayez un autre nom ou un numéro." : "Ajoutez vos contacts et retrouvez-les sur tous les appareils de votre équipe."} action={contactSearch ? "Effacer la recherche" : "Ajouter un contact"} onAction={() => contactSearch ? setContactSearch("") : setContactFormVisible(true)} />}
+        renderItem={({ item }) => <View style={styles.listRow}>
+          <View style={styles.roundIcon}><Text style={styles.iconText}>{item.display_name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</Text></View>
+          <Pressable style={styles.rowCopy} accessibilityRole="button" accessibilityLabel={`Actions pour ${item.display_name}`} onPress={() => Alert.alert(item.display_name, item.contact_phones.map((phone) => phone.phone_number).join("\n") || item.email || "Aucun numéro", [{ text: "Fermer", style: "cancel" }, { text: "Archiver le contact", style: "destructive", onPress: () => Alert.alert("Archiver ce contact ?", `${item.display_name} sera retiré du carnet partagé.`, [{ text: "Annuler", style: "cancel" }, { text: "Archiver", style: "destructive", onPress: () => void archiveContact(item.id) }]) }])}><Text style={styles.rowTitle} numberOfLines={1}>{item.display_name}</Text><Text style={styles.rowMeta} numberOfLines={1}>{item.contact_phones[0]?.phone_number ?? item.email ?? "Aucun numéro"}</Text></Pressable>
+          {item.contact_phones[0] && <View style={styles.actionRow}><IconButton icon="chatbubble-outline" label={`Écrire à ${item.display_name}`} onPress={() => newMessage(item.contact_phones[0]!.phone_number)} /><IconButton icon="call-outline" label={`Composer le numéro de ${item.display_name}`} tone="accent" onPress={() => openDialer(item.contact_phones[0]!.phone_number)} /></View>}
+        </View>}
+      />}
+      {activeTab === "conversations" && <View style={[styles.flex, isThread && { display: "none" }]} accessibilityElementsHidden={isThread} importantForAccessibility={isThread ? "no-hide-descendants" : "auto"}><ConversationInbox
+        inbox={inbox} loading={workspaceLoading} refreshing={refreshing} locked={smsLocked}
+        hasMore={Boolean(inboxCursors.calls || inboxCursors.conversations)} loadingMore={loadingMore}
+        onRefresh={() => void refreshCurrentWorkspace()} onMore={() => void loadMoreInbox()} onOpen={openConversation} onNew={() => newMessage()}
+        header={<>{lineOverview}{smsRecoveryState === "checking" && <Text style={styles.hint}>Vérification des envois précédents…</Text>}{smsRecoveryState === "unavailable" && <ActionButton label="Réessayer la connexion" quiet icon="refresh" onPress={() => void retrySmsRecovery()} />}{pendingSmsAttempt && <ActionButton label="Reprendre le SMS à vérifier" quiet icon="time-outline" onPress={() => setMessageComposerVisible(true)} />}</>}
+      /></View>}
+      {isThread && <ConversationThread
+        key={`${selectedLineId}:${recipientEditable ? "new" : phoneKey(messageDestination)}`}
+        number={messageDestination} name={selectedConversationContactName ?? null} lineNumber={activeLine?.phone_number ?? ""}
+        calls={selectedThread?.calls ?? []} messages={history.messages} state={history.state} hasOlder={history.hasOlder} loadingOlder={history.loadingOlder}
+        hasMoreCalls={Boolean(inboxCursors.calls)} loadingMore={loadingMore} onMoreCalls={() => void loadMoreInbox()}
+        onOlder={() => void history.loadOlder()} onRetry={() => void history.refresh()} refreshing={refreshing} onRefresh={() => void refreshCurrentWorkspace()}
+        body={messageBody} onBody={setMessageBody} onDestination={changeMessageDestination} recipientEditable={recipientEditable}
+        locked={smsLocked} pending={Boolean(pendingSmsAttempt)} recoveryReady={smsRecoveryState === "ready"} busy={busy}
+        canSms={Boolean(activeLine?.sms_enabled && activeAssignment?.can_sms)} canCall={canCall}
+        segments={smsSegmentInfo.segments} onSend={() => void sendMessage()} onCall={() => openDialer(messageDestination)}
+        bottomInset={keyboardVisible ? 0 : insets.bottom}
+      />}
+      {activeTab === "settings" && <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.settingsAccount}><View style={styles.settingsAvatar}><Text style={styles.settingsInitial}>{session.user.email?.slice(0, 1).toUpperCase() ?? "O"}</Text></View><View style={styles.rowCopy}><Text style={styles.rowTitle} numberOfLines={1}>{session.user.email}</Text><Text style={styles.rowMeta}>{organizations.find((item) => item.organization_id === selectedOrg)?.organizations?.name ?? "Votre compte professionnel"}</Text></View></View>
+        <View><Text style={styles.settingsLabel}>VOTRE LIGNE</Text><Card><View style={styles.actionRow}><View style={styles.lineIcon}><Icon name="phone-portrait-outline" color={palette.accent} /></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{activeLine?.phone_number ?? "Aucune ligne attribuée"}</Text><Text style={styles.rowMeta}>{activeLine ? "Ligne professionnelle" : "Demandez une ligne à votre administrateur."}</Text></View></View>
+          <View style={[styles.permissionRow, { marginTop: 12 }]}><Icon name="call-outline" color={palette.muted} /><View style={styles.rowCopy}><Text style={styles.rowTitle}>Appels</Text><Text style={styles.rowMeta}>{activeLine?.voice_enabled && activeAssignment?.can_voice ? voiceStatus : "Non activés"}</Text></View></View>
+          <View style={styles.permissionRow}><Icon name="chatbubbles-outline" color={palette.muted} /><View style={styles.rowCopy}><Text style={styles.rowTitle}>Messages</Text><Text style={styles.rowMeta}>{activeLine?.sms_enabled && activeAssignment?.can_sms ? "SMS activés" : "Non activés"}</Text></View></View>
+          {canReceiveNativeCalls && <Text style={styles.hint}>Les appels entrants sonnent aussi lorsque l’application est en arrière-plan.</Text>}
+        </Card></View>
+        <View><Text style={styles.settingsLabel}>APPAREILS CONNECTÉS</Text><Card>{devices.length ? devices.map((device) => <View style={styles.listRow} key={device.id}><View style={styles.roundIcon}><Icon name={device.platform === "ios" || device.platform === "android" ? "phone-portrait-outline" : "laptop-outline"} color={palette.accent} /></View><View style={styles.rowCopy}><Text style={styles.rowTitle}>{device.label}</Text><Text style={styles.rowMeta}>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${relativeCallDate(device.last_active_at)}` : ""}</Text></View>{device.status === "active" && <IconButton icon="log-out-outline" label={`Révoquer ${device.label}`} onPress={() => Alert.alert("Déconnecter cet appareil ?", `${device.label} ne recevra plus les appels.`, [{ text: "Annuler", style: "cancel" }, { text: "Déconnecter", style: "destructive", onPress: () => void revokeDevice(device.id) }])} />}</View>) : <Text style={styles.hint}>Votre appareil apparaîtra ici une fois votre ligne vocale connectée.</Text>}</Card></View>
+        {organizations.length > 1 && <Card><SectionTitle title="Votre organisation" />{organizations.map((organization) => <Pill key={organization.organization_id} selected={selectedOrg === organization.organization_id} disabled={callStatus !== "idle" || smsLocked} label={organization.organizations?.name ?? "Organisation"} onPress={() => selectOrganization(organization.organization_id)} />)}</Card>}
+        <ActionButton label="Se déconnecter" icon="log-out-outline" quiet onPress={() => void signOut()} disabled={busy || Boolean(pendingSmsAttempt)} />
+        <Text style={[styles.rowMeta, { textAlign: "center", paddingBottom: 12 }]}>Onoff Mobile · Version {mobilePackage.version}</Text>
+      </ScrollView>}
+    </KeyboardAvoidingView>
+    {!keyboardVisible && !isThread && <View style={[styles.nav, { paddingBottom: Math.max(insets.bottom, 10) }]}><View style={styles.navRow}>
+      {tabs.slice(0, 2).map(renderTab)}
+      <Touch accessibilityLabel={callStatus === "idle" ? "Ouvrir le clavier téléphonique" : "Ouvrir le clavier de l’appel"} style={styles.tab} onPress={() => openDialer()}><View style={styles.dialerButton}><Icon name="keypad-outline" size={21} color={palette.accent} /></View><Text style={styles.tabLabel}>Clavier</Text></Touch>
+      {tabs.slice(2).map(renderTab)}
+    </View></View>}
+    {dialerVisible && <Dialer initialNumber={destination} lineNumber={activeLine?.phone_number} canCall={canCall} unavailableReason={callUnavailableReason} busy={busy} notice={notice} onClose={(number) => { setDestination(number); setDialerVisible(false); }} onCall={startCall} onContacts={(number) => { setDestination(number); setDialerVisible(false); changeTab("contacts"); }} />}
+    <Sheet visible={contactFormVisible} title="Nouveau contact" closeDisabled={busy} onClose={() => setContactFormVisible(false)}>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}><ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <Text style={styles.hint}>Un contact partagé avec toute votre équipe.</Text>
+        <View><Text style={styles.fieldLabel}>Nom</Text><TextInput accessibilityLabel="Nom du contact" style={styles.input} placeholder="Prénom et nom" placeholderTextColor={palette.muted} value={contactName} onChangeText={setContactName} autoComplete="name" maxLength={120} />
+          <Text style={styles.fieldLabel}>Téléphone</Text><TextInput accessibilityLabel="Téléphone du contact" style={styles.input} placeholder="Numéro international" placeholderTextColor={palette.muted} keyboardType="phone-pad" value={contactPhone} onChangeText={setContactPhone} />
+          {duplicateContact && <Text style={styles.duplicateWarning}>Ce numéro figure déjà chez {duplicateContact.display_name}. Vérifiez avant d’enregistrer.</Text>}
+          <Text style={styles.fieldLabel}>E-mail · facultatif</Text><TextInput accessibilityLabel="E-mail du contact" style={styles.input} placeholder="Adresse e-mail" placeholderTextColor={palette.muted} keyboardType="email-address" autoCapitalize="none" value={contactEmail} onChangeText={setContactEmail} />
+        </View>
+        {!!notice && <Text accessibilityRole="alert" style={[styles.hint, { color: palette.red }]}>{notice}</Text>}
+        <ActionButton label="Enregistrer le contact" icon="checkmark" loading={busy} onPress={() => void saveContact()} disabled={!selectedOrg || !contactName.trim()} />
+        {!selectedOrg && <Text style={styles.hint}>Vous devez rejoindre une organisation pour ajouter des contacts.</Text>}
+      </ScrollView></KeyboardAvoidingView>
+    </Sheet>
+  </SafeAreaView>;
 }
-
-function Card({ children }: { children: React.ReactNode }) { return <View style={styles.card}>{children}</View>; }
-function SectionTitle({ eyebrow, title }: { eyebrow: string; title: string }) { return <View style={styles.sectionTitle}><Text style={styles.eyebrow}>{eyebrow}</Text><Text style={styles.sectionHeading}>{title}</Text></View>; }
-function Empty({ title, detail }: { title: string; detail: string }) { return <View style={styles.empty}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowMeta}>{detail}</Text></View>; }
-function Pill({ label, selected, disabled = false, onPress }: { label: string; selected: boolean; disabled?: boolean; onPress: () => void }) { return <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled }} onPress={onPress} disabled={disabled} style={[styles.pill, selected && styles.pillSelected, disabled && styles.buttonDisabled]}><Text numberOfLines={1} style={[styles.pillText, selected && styles.pillTextSelected]}>{label}</Text></Pressable>; }
-function ActionButton({ label, onPress, disabled = false, quiet = false }: { label: string; onPress: () => void; disabled?: boolean; quiet?: boolean }) { return <Pressable accessibilityRole="button" onPress={onPress} disabled={disabled} style={[styles.button, quiet && styles.buttonQuiet, disabled && styles.buttonDisabled]}><Text style={[styles.buttonLabel, quiet && styles.buttonLabelQuiet]}>{label}</Text></Pressable>; }
-function SmallButton({ label, onPress, quiet = false, danger = false }: { label: string; onPress: () => void; quiet?: boolean; danger?: boolean }) { return <Pressable accessibilityRole="button" onPress={onPress} style={[styles.smallButton, quiet && styles.buttonQuiet, danger && styles.buttonDanger]}><Text style={[styles.smallButtonText, quiet && styles.buttonLabelQuiet, danger && styles.buttonLabel]}>{label}</Text></Pressable>; }
-
-const palette = { ink: "#14212a", muted: "#75818a", accent: "#116b60", canvas: "#f4f7f5", line: "#e4e9e6", white: "#ffffff", lavender: "#f0efff", green: "#e3f4eb", red: "#fff0ef" };
-const styles = StyleSheet.create({
-  app: { flex: 1, backgroundColor: palette.canvas },
-  authScreen: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: palette.canvas },
-  authCard: { backgroundColor: palette.white, borderRadius: 26, padding: 24, borderWidth: 1, borderColor: palette.line },
-  brandMark: { height: 48, width: 48, borderRadius: 16, backgroundColor: palette.accent, alignItems: "center", justifyContent: "center", marginBottom: 24 },
-  brandLetter: { color: "white", fontSize: 30, fontWeight: "800" },
-  header: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, backgroundColor: palette.white, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  headerTitle: { color: palette.ink, fontSize: 24, fontWeight: "800", marginTop: 2 },
-  avatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: palette.lavender, alignItems: "center", justifyContent: "center" },
-  avatarText: { color: palette.accent, fontWeight: "800", fontSize: 16 },
-  selectors: { backgroundColor: palette.white, paddingBottom: 10 },
-  pills: { paddingHorizontal: 16, gap: 8, paddingVertical: 6 },
-  pill: { borderRadius: 99, borderWidth: 1, borderColor: palette.line, paddingVertical: 8, paddingHorizontal: 13, maxWidth: 210 },
-  pillSelected: { borderColor: palette.accent, backgroundColor: "#e8f4f0" },
-  pillText: { color: palette.muted, fontSize: 12, fontWeight: "700" },
-  pillTextSelected: { color: palette.accent },
-  content: { padding: 16, gap: 14, paddingBottom: 28 },
-  card: { backgroundColor: palette.white, borderRadius: 20, padding: 17, borderWidth: 1, borderColor: palette.line },
-  sectionTitle: { marginBottom: 12 },
-  sectionHeading: { color: palette.ink, fontSize: 20, fontWeight: "800", marginTop: 3 },
-  eyebrow: { color: palette.accent, fontSize: 10, fontWeight: "800", letterSpacing: 1.4 },
-  title: { color: palette.ink, fontSize: 29, fontWeight: "800", marginTop: 5 },
-  body: { color: palette.muted, fontSize: 14, lineHeight: 20, marginTop: 6, marginBottom: 20 },
-  input: { backgroundColor: "#f8faf9", color: palette.ink, borderWidth: 1, borderColor: palette.line, borderRadius: 12, paddingHorizontal: 13, paddingVertical: 12, fontSize: 15, marginBottom: 10 },
-  multiline: { minHeight: 86, textAlignVertical: "top" },
-  button: { backgroundColor: palette.accent, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, alignItems: "center", justifyContent: "center", minHeight: 45, marginTop: 3 },
-  buttonQuiet: { backgroundColor: "#edf3f0", marginTop: 9 },
-  buttonDisabled: { opacity: 0.5 },
-  buttonLabel: { color: palette.white, fontSize: 14, fontWeight: "800" },
-  buttonLabelQuiet: { color: palette.accent },
-  smallButton: { backgroundColor: palette.accent, paddingHorizontal: 11, paddingVertical: 8, borderRadius: 10 },
-  smallButtonText: { color: palette.white, fontSize: 12, fontWeight: "700" },
-  buttonDanger: { backgroundColor: "#b54142" },
-  hint: { color: palette.muted, fontSize: 12, lineHeight: 17, marginTop: 9 },
-  muted: { color: palette.muted, fontSize: 14, marginTop: 12 },
-  center: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: palette.canvas },
-  listRow: { flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 11, borderTopWidth: 1, borderTopColor: "#f0f2f1" },
-  rowCopy: { flex: 1, minWidth: 0 },
-  rowTitle: { color: palette.ink, fontWeight: "700", fontSize: 14 },
-  rowMeta: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
-  unread: { color: palette.accent, fontSize: 10, fontWeight: "800", backgroundColor: "#e8f4f0", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, overflow: "hidden" },
-  duplicateWarning: { color: "#8b5c22", backgroundColor: "#fff4df", borderRadius: 10, padding: 10, fontSize: 12, lineHeight: 17, marginBottom: 10 },
-  roundIcon: { height: 38, width: 38, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  purple: { backgroundColor: palette.lavender },
-  green: { backgroundColor: palette.green },
-  gray: { backgroundColor: "#edf0ef" },
-  iconText: { color: palette.accent, fontSize: 15, fontWeight: "800" },
-  status: { color: palette.muted, fontSize: 10, textTransform: "capitalize" },
-  empty: { paddingVertical: 18, alignItems: "center", gap: 5 },
-  actionRow: { flexDirection: "row", gap: 7, alignItems: "center" },
-  selectedRow: { backgroundColor: "#f0f7f4", marginHorizontal: -5, paddingHorizontal: 5, borderRadius: 12 },
-  messageBubble: { alignSelf: "flex-start", maxWidth: "88%", backgroundColor: "#f0f3f2", borderRadius: 14, padding: 11, marginBottom: 8 },
-  outgoingBubble: { alignSelf: "flex-end", backgroundColor: "#e7f4ef" },
-  messageText: { color: palette.ink, fontSize: 14, lineHeight: 20 },
-  messageMeta: { color: palette.muted, fontSize: 10, marginTop: 6, textAlign: "right" },
-  archive: { color: "#a34a4d", fontSize: 19, padding: 6 },
-  revoke: { color: "#a34a4d", fontSize: 11, fontWeight: "700" },
-  notice: { marginHorizontal: 14, marginTop: 10, backgroundColor: palette.red, borderRadius: 12, padding: 11, flexDirection: "row", gap: 8 },
-  noticeText: { color: "#8e3338", fontSize: 12, lineHeight: 17, flex: 1 },
-  noticeClose: { color: "#8e3338", fontSize: 19, paddingHorizontal: 3 },
-  callBanner: { marginHorizontal: 14, marginTop: 10, backgroundColor: palette.accent, borderRadius: 15, padding: 13, gap: 11 },
-  callBannerTitle: { color: "white", fontWeight: "800", fontSize: 14 },
-  callBannerMeta: { color: "#d1e9e1", fontSize: 11, marginTop: 2 },
-  keypad: { alignSelf: "center", width: 216, flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 8 },
-  keypadKey: { width: 64, height: 48, borderRadius: 12, backgroundColor: "#ffffff24", alignItems: "center", justifyContent: "center" },
-  keypadDigit: { color: palette.white, fontSize: 18, fontWeight: "700" },
-  tabBar: { flexDirection: "row", backgroundColor: palette.white, borderTopWidth: 1, borderTopColor: palette.line, paddingTop: 9, paddingBottom: Platform.OS === "ios" ? 22 : 10 },
-  tab: { flex: 1, alignItems: "center", gap: 3, paddingVertical: 3 },
-  tabIcon: { color: "#83908c", fontSize: 17, fontWeight: "700" },
-  tabLabel: { color: "#83908c", fontSize: 10, fontWeight: "700" },
-  tabActive: { color: palette.accent },
-});

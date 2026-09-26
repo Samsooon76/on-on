@@ -3,6 +3,7 @@
   "compilerOptions": {
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx"]

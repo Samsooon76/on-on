@@ -1,3 +1,5 @@
+export * from "./conversations.js";
+
 export type QueryValue = string | number | boolean | null | undefined;
 export type Query = Readonly<Record<string, QueryValue>>;
 
@@ -134,6 +136,9 @@ export function createApiClient(options: ApiClientOptions) {
         requestId: typeof errorBody.requestId === "string" ? errorBody.requestId : response.headers.get("x-request-id"),
       });
     }
+    if (response.status !== 204 && body === null) {
+      throw new ApiClientError({ message: "La réponse de l’API est invalide. Réessayez.", status: 502, code: "invalid_api_response", requestId: response.headers.get("x-request-id") });
+    }
     return body as T;
   }
 
@@ -143,7 +148,7 @@ export function createApiClient(options: ApiClientOptions) {
       query: { ...input.query, limit: input.limit, cursor: input.cursor },
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    if (!Array.isArray(result.items) || !(result.nextCursor === null || typeof result.nextCursor === "string")) {
+    if (!result || !Array.isArray(result.items) || !(result.nextCursor === null || typeof result.nextCursor === "string")) {
       throw new ApiClientError({ message: "La réponse paginée de l’API est invalide.", status: 502, code: "invalid_api_response" });
     }
     return result as ApiPage<T>;

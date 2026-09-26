@@ -127,3 +127,6 @@ export type CallIntentCreate = z.infer<typeof callIntentCreateSchema>;
 export type MessageCreate = z.infer<typeof messageCreateSchema>;
 
 export * from "./call-center.js";
+export type { StatisticsCall, StatisticsSnapshot } from "./statistics.js";
+export * from "./services.js";
+export * from "./mcp.js";

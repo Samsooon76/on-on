@@ -7,6 +7,7 @@ export class TwilioWebVoiceClient implements VoiceClient {
   private device: Device | null = null;
   private activeCall: Call | null = null;
   private refreshToken: (() => Promise<string>) | null = null;
+  private connectVersion = 0;
   private readonly listeners = new Set<(event: VoiceEvent) => void>();
 
   async register(token: string, refreshToken: () => Promise<string>): Promise<void> {
@@ -32,8 +33,15 @@ export class TwilioWebVoiceClient implements VoiceClient {
 
   async startCall(call: StartVoiceCall): Promise<void> {
     if (!this.device || this.device.state !== "registered") throw new Error("Activez la ligne vocale avant d’appeler.");
+    if (this.activeCall) throw new Error("Un appel est déjà en cours.");
+    const device = this.device;
+    const version = ++this.connectVersion;
     this.emit({ type: "connecting" });
-    const activeCall = await this.device.connect({ params: { To: call.destination, CallIntentId: call.intentId } });
+    const activeCall = await device.connect({ params: { To: call.destination, CallIntentId: call.intentId } });
+    if (version !== this.connectVersion || this.device !== device) {
+      activeCall.disconnect();
+      throw new Error("La préparation de l’appel a été annulée.");
+    }
     this.bindCall(activeCall, false);
   }
 
@@ -46,13 +54,13 @@ export class TwilioWebVoiceClient implements VoiceClient {
   }
 
   hangUp(): void {
+    this.connectVersion += 1;
     this.activeCall?.disconnect();
     this.device?.disconnectAll();
   }
 
   setMuted(muted: boolean): void {
     this.activeCall?.mute(muted);
-    this.emit({ type: "muted", muted });
   }
 
   sendDigits(digits: string): void {
@@ -65,6 +73,7 @@ export class TwilioWebVoiceClient implements VoiceClient {
   }
 
   async destroy(): Promise<void> {
+    this.connectVersion += 1;
     const device = this.device;
     this.device = null;
     this.activeCall = null;
@@ -77,17 +86,23 @@ export class TwilioWebVoiceClient implements VoiceClient {
 
   private bindCall(call: Call, incoming: boolean): void {
     this.activeCall = call;
-    if (!incoming) this.emit({ type: "ringing" });
-    call.on("accept", () => this.emit({ type: "active" }));
-    call.on("ringing", () => this.emit({ type: "ringing" }));
-    call.on("mute", (muted) => this.emit({ type: "muted", muted }));
-    call.on("disconnect", () => this.finish("completed"));
-    call.on("cancel", () => this.finish(incoming ? "missed" : "canceled"));
-    call.on("reject", () => this.finish("rejected"));
-    call.on("error", () => this.finish("failed"));
+    const emit = (event: VoiceEvent) => { if (this.activeCall === call) this.emit(event); };
+    call.on("accept", () => emit({ type: "active" }));
+    call.on("ringing", () => emit({ type: "ringing" }));
+    call.on("mute", (muted) => emit({ type: "muted", muted }));
+    call.on("reconnecting", () => emit({ type: "reconnecting" }));
+    call.on("reconnected", () => emit({ type: "reconnected" }));
+    call.on("disconnect", () => this.finish(call, "completed"));
+    call.on("cancel", () => this.finish(call, incoming ? "missed" : "canceled"));
+    call.on("reject", () => this.finish(call, "rejected"));
+    call.on("error", () => this.finish(call, "failed"));
+    // connect() can resolve after a fast SDK transition. Read its actual state.
+    if (!incoming && call.status() === "open") emit({ type: "active" });
+    else if (!incoming && call.status() === "ringing") emit({ type: "ringing" });
   }
 
-  private finish(reason: Extract<VoiceEvent, { type: "ended" }> ["reason"]): void {
+  private finish(call: Call, reason: Extract<VoiceEvent, { type: "ended" }> ["reason"]): void {
+    if (this.activeCall !== call) return;
     this.activeCall = null;
     this.emit({ type: "ended", reason });
   }

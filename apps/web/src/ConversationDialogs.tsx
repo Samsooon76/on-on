@@ -1,19 +1,25 @@
 import { useState } from "react";
 import { ArrowRight, Backspace, ChatCircle, Microphone, MicrophoneSlash, Phone, PhoneDisconnect, PhoneX } from "@phosphor-icons/react";
 import { normalizePhoneNumber } from "@onoff/contracts";
+import type { ApiPage } from "@onoff/api-client";
+import { useContacts } from "./useContacts";
 import { Avatar, Modal } from "./ui";
 import { formatPhone, type Contact } from "./conversation-model";
 
-export function NewConversation({ contacts, onOpen, onClose }: { contacts: Contact[]; onOpen(number: string): void; onClose(): void }) {
+export function NewConversation({ scope, loadContacts, onOpen, onClose }: { scope: string; loadContacts(query: string, cursor: string | null, signal: AbortSignal): Promise<ApiPage<Contact>>; onOpen(number: string): void; onClose(): void }) {
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
-  const matches = contacts.filter((contact) => `${contact.display_name} ${contact.contact_phones.map((phone) => phone.phone_number).join(" ")}`.toLocaleLowerCase("fr").includes(query.toLocaleLowerCase("fr"))).slice(0, 6);
+  const directory = useContacts(scope, query, loadContacts);
+  const matches = directory.contacts;
   return <Modal title="Nouvelle conversation" onClose={onClose}>
     <p className="modal-description">Choisissez un contact ou saisissez un numéro.</p>
     <form onSubmit={(event) => { event.preventDefault(); const number = normalizePhoneNumber(query); if (number) onOpen(number); else setError("Choisissez un contact ou saisissez un numéro valide, par exemple +33 6 12 34 56 78."); }}>
-      <label className="field-label">À<input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setError(""); }} placeholder="Nom ou numéro de téléphone" autoComplete="off" /></label>
+      <label className="field-label">À<input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setError(""); }} placeholder="Nom ou numéro de téléphone" maxLength={80} autoComplete="off" /></label>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="recipient-list">{matches.flatMap((contact) => contact.contact_phones.map((phone) => <button type="button" key={phone.id} onClick={() => onOpen(phone.phone_number)}><Avatar name={contact.display_name} /><span><b>{contact.display_name}</b><small>{formatPhone(phone.phone_number)}</small></span><ArrowRight size={18} /></button>))}</div>
+      {directory.state === "loading" && <p role="status">Recherche des contacts…</p>}
+      {directory.error && <p className="form-error" role="alert">{directory.error} <button type="button" className="text-button" onClick={() => void directory.refresh()}>Réessayer</button></p>}
+      {directory.hasMore && <button type="button" className="load-more" disabled={directory.loadingMore} onClick={() => void directory.more()}>Voir les contacts suivants</button>}
       <button className="button button-primary button-wide" type="submit" disabled={!query.trim()}><ChatCircle size={18} />Ouvrir la conversation</button>
     </form>
   </Modal>;

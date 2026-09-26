@@ -9,6 +9,8 @@ try {
     create role anon;
     create role authenticated;
     create role service_role bypassrls;
+    create role authenticator;
+    create role supabase_auth_admin;
     create schema auth;
     create schema extensions;
     create schema realtime;
@@ -29,7 +31,7 @@ try {
     catch (error) { throw new Error(`Migration ${migration}: ${error.message}`, { cause: error }); }
   }
   const results = [];
-  for (const file of ['admin_and_ivr.test.sql', 'live_call_center.test.sql']) results.push(...await db.exec(await readFile(new URL('../supabase/tests/' + file, import.meta.url), 'utf8')));
+  for (const file of ['admin_and_ivr.test.sql', 'live_call_center.test.sql', 'mcp_integrations.test.sql']) results.push(...await db.exec(await readFile(new URL('../supabase/tests/' + file, import.meta.url), 'utf8')));
   console.log(`${migrations.length} migrations applied to isolated PostgreSQL.`);
   for (const result of results) for (const row of result.rows) console.log(Object.values(row).join(' '));
 } catch (error) {

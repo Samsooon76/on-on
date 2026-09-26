@@ -1,5 +1,25 @@
 # Compatibilité mobile vérifiée
 
+## Design iOS aligné sur le web — 26 septembre 2026
+
+Les écrans partagent désormais le fond blanc, le vert `#246653` et les surfaces neutres du web. La typographie système utilise des graisses plus légères, avec des titres de 28 pt et des contrôles aux arrondis de 8–12 pt. Les filtres sont soulignés, les avatars sont discrets et le clavier rejoint l’alignement de la barre de navigation. Les conversations, formulaires, réglages et le clavier utilisent ces mêmes styles.
+
+Les cibles tactiles conservent au moins 44 pt. Les contrastes des textes secondaires et des boutons actifs sont supérieurs à 4,5:1. Vérifications : TypeScript, 16 tests mobile, export Hermes iOS et contrôle visuel de l’accueil dans le simulateur iPhone 17 Pro. Aperçu : [Conversations](../output/ios/onoff-refined-conversations.png).
+
+## Conversations sur iOS — 26 septembre 2026
+
+L’onglet Conversations ouvre désormais l’application. Il regroupe les appels et SMS par numéro et par ligne avec la même logique que le web, extraite dans `@onoff/api-client`. Un fil existe dès le premier appel et conserve son identité au premier SMS.
+
+- Recherche par nom, numéro ou aperçu ; filtres Toutes, Non lues et Manqués.
+- Historique commun, séparateurs de dates, filtres Tout/SMS/Appels, rappel et composition de SMS dans le fil.
+- Ouverture depuis un contact ou un appel récent ; avertissement avant de remplacer un brouillon.
+- Chargement des pages précédentes ; actualisation au retour au premier plan et sur les événements temps réel.
+- Les réponses tardives d’un autre fil sont ignorées. Seul le fil visible au premier plan est marqué comme lu. La reprise des SMS incertains conserve la clé d’idempotence existante.
+
+Validation : tests mobile (regroupement, recherche, pagination, changement de fil pendant une requête, lecture et reprise après erreur), tests web et client API, vérifications TypeScript, build web et export Hermes iOS. Le nouvel écran d’accueil a été observé dans le simulateur iPhone 17 Pro. La session disponible n’avait aucune ligne attribuée : le parcours complet avec échanges réels reste à vérifier sur un compte équipé d’une ligne et sur iPhone physique.
+
+## Vérification initiale du socle mobile
+
 État au 2026-09-25. Cette vérification confirme la compilation TypeScript, la résolution Expo, la génération des projets natifs et les bundles JavaScript. Elle ne remplace pas une installation ni un appel sur iPhone et Android physiques.
 
 ## Versions retenues

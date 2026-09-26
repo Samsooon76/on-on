@@ -27,3 +27,14 @@ enabled = true
 site_url = "http://localhost:5173"
 additional_redirect_urls = ["http://localhost:5173/**"]
 enable_signup = false
+
+# Enable the token hook before OAuth, after applying the MCP migration.
+# The hosted project is configured separately; see docs/runbooks/mcp-setup.md.
+[auth.hook.custom_access_token]
+enabled = false
+uri = "pg-functions://postgres/public/onoff_mcp_access_token_hook"
+
+[auth.oauth_server]
+enabled = false
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = false

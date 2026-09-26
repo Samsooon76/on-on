@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import RequestClient from "twilio/lib/base/RequestClient.js";
 import { createApp } from "../dist/app.js";
 import { loadConfig } from "../dist/config.js";
+import { createNumberProvider } from "../dist/number-provisioning.js";
 
 const orgId = "00000000-0000-4000-8000-000000000001";
 const userId = "00000000-0000-4000-8000-000000000010";
@@ -16,7 +18,9 @@ const headers = { authorization: "Bearer test-session" };
 
 function setup(t, options = {}) {
   const state = {
-    role: "admin", monthlyPrice: 1.15, purchaseCalls: [], owned: [], regulations: [], failCompletion: false,
+    role: "admin", monthlyPrice: 1.15, purchaseCalls: [], completionCalls: [], owned: [], regulations: [], failCompletion: false,
+    available: [{ phoneNumber: "+33523550534", capabilities: { voice: true, sms: false }, addressRequirements: "none" }],
+    bundle: { status: "twilio-approved", regulationSid: `RN${"4".repeat(32)}` },
     tables: { number_quotes: [], number_orders: [], number_provisioning_profiles: [] }, ...options,
   };
   const client = {
@@ -52,6 +56,7 @@ function setup(t, options = {}) {
         return { data: { created: true, order: structuredClone(order) }, error: null };
       }
       if (name === "complete_number_order") {
+        state.completionCalls.push(params);
         if (state.failCompletion) return { data: null, error: { code: "XX000" } };
         const order = state.tables.number_orders.find((item) => item.id === params.p_order_id);
         order.status = "completed"; order.line_id ??= randomUUID();
@@ -60,19 +65,18 @@ function setup(t, options = {}) {
       throw new Error(`Unexpected RPC ${name}`);
     },
   };
-  const available = [{ phoneNumber: "+12025550101", capabilities: { voice: true, sms: true }, addressRequirements: "none" }];
   const provider = {
-    available: async () => available,
+    available: async () => state.available,
     price: async () => ({ monthlyPrice: state.monthlyPrice, currency: "USD" }),
     regulations: async () => state.regulations,
-    bundle: async () => ({ status: "twilio-approved", regulationSid: `RN${"4".repeat(32)}` }),
+    bundle: async () => state.bundle,
     address: async () => ({ accountSid }),
     voiceApplication: async () => ({ voiceUrl: `${config.API_PUBLIC_URL}/webhooks/twilio/voice/outbound`, voiceMethod: "POST" }),
     owned: async () => state.owned,
     async purchase(input) {
       state.purchaseCalls.push(input);
       if (state.reject) throw state.reject;
-      const number = { sid: `PN${"5".repeat(32)}`, accountSid, phoneNumber: input.phoneNumber, friendlyName: input.friendlyName, capabilities: { voice: true, sms: true } };
+      const number = { sid: `PN${"5".repeat(32)}`, accountSid, phoneNumber: input.phoneNumber, friendlyName: input.friendlyName, capabilities: state.available.find((item) => item.phoneNumber === input.phoneNumber).capabilities };
       state.owned.push(number);
       if (state.timeoutAfterPurchase) throw new Error("Network timeout");
       return number;
@@ -81,11 +85,32 @@ function setup(t, options = {}) {
   const app = createApp({ ...config, ...(options.config ?? {}) }, { createSupabaseClient: () => client, numberProvider: provider });
   t.after(() => app.close());
   const url = `/v1/organizations/${orgId}`;
-  const search = () => app.inject({ method: "GET", url: `${url}/number-offers?country=US`, headers });
+  const search = (country = "FR") => app.inject({ method: "GET", url: `${url}/number-offers?country=${country}`, headers });
   const purchase = (quoteId, key = randomUUID()) => app.inject({ method: "POST", url: `${url}/number-orders`, headers: { ...headers, "idempotency-key": key }, payload: { quoteId } });
   const orders = () => app.inject({ method: "GET", url: `${url}/number-orders`, headers });
   return { app, state, search, purchase, orders, provider };
 }
+
+test("Twilio searches local voice inventory without requiring SMS or MMS, including purchase revalidation", async (t) => {
+  const requests = [];
+  t.mock.method(RequestClient.prototype, "request", async function (input) {
+    requests.push(input);
+    assert.equal(this.autoRetry, false);
+    return { statusCode: 200, body: { available_phone_numbers: [], next_page_uri: null } };
+  });
+  const provider = createNumberProvider(config);
+  await provider.available("FR");
+  await provider.available("FR", "+33523550534");
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.method, "get");
+    assert.match(request.uri, /\/AvailablePhoneNumbers\/FR\/Local.json$/);
+    assert.equal(request.params.VoiceEnabled, "true");
+    assert.equal(request.params.SmsEnabled, undefined);
+    assert.equal(request.params.MmsEnabled, undefined);
+  }
+  assert.equal(requests[1].params.Contains, "+33523550534");
+});
 
 test("number search and purchase require authentication and organization admin rights", async (t) => {
   const { app, state, search, purchase } = setup(t);
@@ -103,12 +128,13 @@ test("number offers expose account pricing without provider credentials or compl
   const offer = result.json().items[0];
   assert.equal(offer.monthlyPrice, 1.15);
   assert.equal(offer.currency, "USD");
-  assert.equal(offer.phoneNumber, "+12025550101");
+  assert.equal(offer.phoneNumber, "+33523550534");
+  assert.equal(offer.smsEnabled, false);
   assert.equal("account_sid" in offer, false);
   assert.equal("bundle_sid" in offer, false);
 });
 
-test("one confirmation purchases, configures inbound webhooks and returns the assigned line", async (t) => {
+test("one confirmation buys a voice-only number, configures voice webhooks and returns the assigned line", async (t) => {
   const { state, search, purchase } = setup(t);
   const quote = (await search()).json().items[0];
   const key = randomUUID();
@@ -119,10 +145,74 @@ test("one confirmation purchases, configures inbound webhooks and returns the as
   assert.equal(duplicate.statusCode, 200);
   assert.equal(state.purchaseCalls.length, 1);
   assert.equal(state.purchaseCalls[0].voiceUrl, "https://api.example.com/webhooks/twilio/voice/inbound");
-  assert.equal(state.purchaseCalls[0].smsUrl, "https://api.example.com/webhooks/twilio/messages/inbound");
+  assert.equal(state.purchaseCalls[0].smsUrl, undefined);
+  assert.equal(state.purchaseCalls[0].smsMethod, undefined);
+  assert.equal(state.purchaseCalls[0].statusCallback, "https://api.example.com/webhooks/twilio/voice/status");
+  assert.equal(state.completionCalls[0].p_voice, true);
+  assert.equal(state.completionCalls[0].p_sms, false);
   assert.equal(state.purchaseCalls[0].voiceApplicationSid, undefined);
   assert.equal((await purchase(quote.quoteId, key)).json().lineId, first.json().lineId);
   assert.equal(state.purchaseCalls.length, 1);
+});
+
+test("SMS-capable local numbers are offered and assigned for voice only, including recovery", async (t) => {
+  const { state, search, purchase, orders } = setup(t, { failCompletion: true });
+  state.available[0].capabilities.sms = true;
+  const quote = (await search()).json().items[0];
+  assert.equal(quote.smsEnabled, false);
+  assert.equal(state.tables.number_quotes[0].sms_enabled, false);
+  assert.equal((await purchase(quote.quoteId)).json().status, "pending");
+  state.failCompletion = false;
+  assert.equal((await orders()).json().items[0].status, "completed");
+  assert.ok(state.completionCalls.length >= 2);
+  assert.ok(state.completionCalls.every((input) => input.p_voice && input.p_sms === false));
+  assert.equal(state.purchaseCalls.length, 1);
+  assert.equal(state.purchaseCalls[0].smsUrl, undefined);
+});
+
+test("numbers without voice are excluded and a loss of voice availability prevents charging", async (t) => {
+  const { state, search, purchase } = setup(t);
+  const quote = (await search()).json().items[0];
+  state.available[0].capabilities.voice = false;
+  assert.equal((await purchase(quote.quoteId)).json().code, "number_unavailable");
+  const response = await search();
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().items, []);
+  assert.equal(state.purchaseCalls.length, 0);
+});
+
+test("French local voice-only purchase supplies the approved local bundle and required address", async (t) => {
+  const { state, search, purchase } = setup(t, { regulations: [{ sid: `RN${"4".repeat(32)}` }] });
+  const profile = { organization_id: orgId, country: "FR", end_user_type: "business", bundle_sid: `BU${"6".repeat(32)}`, address_sid: `AD${"7".repeat(32)}` };
+  state.tables.number_provisioning_profiles.push(profile);
+  state.available[0].addressRequirements = "local";
+  const offers = await search();
+  assert.equal(offers.statusCode, 200);
+  const result = await purchase(offers.json().items[0].quoteId);
+  assert.equal(result.statusCode, 201);
+  assert.equal(state.purchaseCalls[0].bundleSid, profile.bundle_sid);
+  assert.equal(state.purchaseCalls[0].addressSid, profile.address_sid);
+  assert.equal(state.purchaseCalls[0].smsUrl, undefined);
+  assert.equal(state.completionCalls[0].p_sms, false);
+});
+
+test("unapproved or wrong-type bundles and missing addresses still block a local voice purchase", async (t) => {
+  const { state, search, purchase } = setup(t, { regulations: [{ sid: `RN${"4".repeat(32)}` }] });
+  const profile = { organization_id: orgId, country: "FR", end_user_type: "business", bundle_sid: `BU${"6".repeat(32)}`, address_sid: `AD${"7".repeat(32)}` };
+  state.tables.number_provisioning_profiles.push(profile);
+  const quote = (await search()).json().items[0];
+  state.bundle.status = "pending-review";
+  assert.equal((await purchase(quote.quoteId)).json().code, "number_compliance_required");
+  assert.match((await search()).json().message, /pas encore approuvé/);
+  state.bundle.status = "twilio-approved";
+  state.bundle.regulationSid = `RN${"8".repeat(32)}`;
+  assert.equal((await purchase(quote.quoteId)).json().code, "number_compliance_required");
+  assert.match((await search()).json().message, /ne correspond pas aux numéros locaux/);
+  state.bundle.regulationSid = `RN${"4".repeat(32)}`;
+  state.available[0].addressRequirements = "local";
+  profile.address_sid = null;
+  assert.equal((await search()).json().code, "number_address_required");
+  assert.equal(state.purchaseCalls.length, 0);
 });
 
 test("a timeout after Twilio purchased the number is reconciled without purchasing again", async (t) => {

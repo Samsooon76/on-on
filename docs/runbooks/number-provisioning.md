@@ -1,8 +1,8 @@
 # Commander un numéro depuis le Web
 
-Le bouton **Ajouter un numéro** est visible pour les administrateurs de l’organisation, y compris quand aucune ligne n’est encore attribuée. Le parcours sélectionne un pays, affiche jusqu’à huit numéros locaux compatibles voix et le tarif mensuel renvoyé par Twilio, puis demande une confirmation explicite. La commande est facturée au compte Twilio configuré côté API. La ligne est attribuée au compte connecté et le bouton **Passer un appel** sélectionne cette ligne dans le composeur.
+Le bouton **Ajouter un numéro** est visible pour les administrateurs de l’organisation, y compris quand aucune ligne n’est encore attribuée. Le parcours sélectionne un pays, affiche jusqu’à huit numéros locaux pour les appels uniquement et le tarif mensuel renvoyé par Twilio, puis demande une confirmation explicite. La commande est facturée au compte Twilio configuré côté API. La ligne est attribuée au compte connecté et le bouton **Passer un appel** sélectionne cette ligne dans le composeur.
 
-La première version propose France, Belgique, Royaume-Uni et États-Unis. La disponibilité dépend du stock Twilio; aucun numéro ni prix n’est simulé en production. Les frais d’usage et les taxes sont distincts de l’abonnement mensuel affiché. La commande utilise `IncomingPhoneNumbers.create`, pas une simple insertion locale.
+La première version propose France, Belgique, Royaume-Uni et États-Unis. La disponibilité dépend du stock Twilio; aucun numéro ni prix n’est simulé en production. Les frais d’usage et les taxes sont distincts de l’abonnement mensuel affiché. La commande utilise `IncomingPhoneNumbers.create`, pas une simple insertion locale. La recherche utilise exclusivement `AvailablePhoneNumbers/{country}/Local` avec `VoiceEnabled=true`, sans exiger de capacité SMS/MMS. Les offres, les lignes créées et leurs attributions gardent les SMS désactivés, même si Twilio indique une capacité SMS sur le numéro. Aucun webhook SMS n’est configuré lors de l’achat.
 
 ## Configuration initiale du serveur
 
@@ -18,12 +18,12 @@ L’API interroge les réglementations Twilio pour les numéros **locaux** du pa
 
 Ces références sont configurées par l’exploitant côté serveur, jamais demandées à l’utilisateur dans le formulaire d’achat. Le bundle doit décrire l’utilisateur final réel de cette organisation. Ne pas réutiliser le dossier d’une autre organisation. L’API vérifie l’état `twilio-approved`, la réglementation du bundle et le compte de l’adresse; Twilio vérifie également les contraintes locales au moment de la commande.
 
-La collecte des justificatifs et la revue Twilio restent une configuration initiale dans la Console Twilio. Si le dossier ou l’adresse manque, le formulaire affiche le blocage avant tout achat. Aucune procédure de vérification d’identité n’est contournée ou simulée.
+La collecte des justificatifs et la revue Twilio restent une configuration initiale dans la Console Twilio. Si le dossier ou l’adresse manque, le formulaire affiche le blocage avant tout achat. Le mode appels uniquement ne supprime pas cette condition. Le dossier doit correspondre au type **Local**; un dossier Mobile ne convient pas. La sélection d’un numéro dans la Console Twilio ne vaut pas approbation du dossier. Aucune procédure de vérification d’identité n’est contournée ou simulée.
 
 ## API
 
 - `GET /v1/organizations/:orgId/number-offers?country=FR` renvoie des offres nominatives valables dix minutes, avec prix, devise et capacités. Le serveur conserve le prix et les références fournisseur; le client ne peut pas les imposer.
-- `POST /v1/organizations/:orgId/number-orders`, corps `{ "quoteId": "…" }`, en-tête `Idempotency-Key` UUID : vérifie à nouveau le prix, la disponibilité, les droits, le dossier et la TwiML App. Enregistre la commande avant le POST payant, configure les webhooks entrants voix/SMS et le callback vocal, puis crée la ligne et son attribution dans une transaction.
+- `POST /v1/organizations/:orgId/number-orders`, corps `{ "quoteId": "…" }`, en-tête `Idempotency-Key` UUID : vérifie à nouveau le prix, la disponibilité, les droits, le dossier et la TwiML App. Enregistre la commande avant le POST payant, configure le webhook vocal entrant et le callback vocal, puis crée la ligne et son attribution dans une transaction.
 - `GET /v1/organizations/:orgId/number-orders` retourne les dix dernières commandes de cet administrateur dans cette organisation et vérifie les commandes encore incertaines auprès de Twilio. Aucun autre utilisateur ou espace n’est exposé.
 
 ## Reprise d’une commande incertaine

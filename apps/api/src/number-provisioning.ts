@@ -11,7 +11,7 @@ type Order = Database["public"]["Tables"]["number_orders"]["Row"];
 type Profile = Database["public"]["Tables"]["number_provisioning_profiles"]["Row"];
 type AvailableNumber = { phoneNumber: string; capabilities: { voice: boolean; sms: boolean }; addressRequirements: string };
 type OwnedNumber = { sid: string; accountSid: string; phoneNumber: string; friendlyName: string; capabilities: { voice: boolean; sms: boolean } };
-type PurchaseInput = { phoneNumber: string; friendlyName: string; voiceUrl: string; voiceMethod: string; smsUrl: string; smsMethod: string; statusCallback: string; statusCallbackMethod: string; bundleSid?: string; addressSid?: string };
+type PurchaseInput = { phoneNumber: string; friendlyName: string; voiceUrl: string; voiceMethod: string; statusCallback: string; statusCallbackMethod: string; bundleSid?: string; addressSid?: string };
 
 export type NumberProvider = {
   available(country: string, phoneNumber?: string): Promise<AvailableNumber[]>;
@@ -30,6 +30,7 @@ export function createNumberProvider(config: AppConfig): NumberProvider {
     accountSid: config.TWILIO_ACCOUNT_SID!, autoRetry: false, timeout: 12_000,
   });
   return {
+    // Local voice numbers only. SMS/MMS capability is not required for calls.
     available: (country, phoneNumber) => client.availablePhoneNumbers(country).local.list({
       voiceEnabled: true, excludeAllAddressRequired: false, limit: 8,
       ...(phoneNumber ? { contains: phoneNumber } : {}),
@@ -85,10 +86,13 @@ export function registerNumberRoutes(routes: FastifyInstance, config: AppConfig,
     const profile = result.data;
     const regulations = await provider!.regulations(country, profile?.end_user_type as "business" | "individual" | undefined);
     if (regulations.length) {
-      if (!profile?.bundle_sid) throw new ProvisioningError("number_compliance_required", "Un dossier d’identité approuvé est nécessaire pour ce pays. L’administrateur doit le configurer une première fois avant l’achat.", 409);
+      if (!profile?.bundle_sid) throw new ProvisioningError("number_compliance_required", "L’achat d’un numéro local dans ce pays exige un dossier d’identité approuvé par Twilio, même pour les appels uniquement. Faites valider le dossier dans la Console Twilio, puis associez-le à votre organisation avant de commander.", 409);
       const bundle = await provider!.bundle(profile.bundle_sid);
-      if (bundle.status !== "twilio-approved" || !regulations.some((regulation) => regulation.sid === bundle.regulationSid)) {
-        throw new ProvisioningError("number_compliance_required", "Le dossier d’identité de votre organisation n’est pas encore approuvé pour ces numéros.", 409);
+      if (bundle.status !== "twilio-approved") {
+        throw new ProvisioningError("number_compliance_required", "Twilio n’a pas encore approuvé le dossier d’identité de votre organisation. Attendez sa validation avant d’acheter un numéro local, même pour les appels uniquement.", 409);
+      }
+      if (!regulations.some((regulation) => regulation.sid === bundle.regulationSid)) {
+        throw new ProvisioningError("number_compliance_required", "Le dossier Twilio associé ne correspond pas aux numéros locaux de ce pays et au type d’utilisateur de votre organisation. Associez un dossier approuvé pour ces numéros locaux.", 409);
       }
     }
     if (profile?.address_sid) {
@@ -109,7 +113,8 @@ export function registerNumberRoutes(routes: FastifyInstance, config: AppConfig,
     if (number.phoneNumber !== order.phone_number || number.accountSid !== order.account_sid || number.friendlyName !== `onoff-order:${order.id}` || !/^PN[0-9a-fA-F]{32}$/.test(number.sid) || !number.capabilities.voice) return present(order);
     const result = await db!.rpc("complete_number_order", {
       p_order_id: order.id, p_account_sid: number.accountSid, p_number_sid: number.sid,
-      p_phone_number: number.phoneNumber, p_voice: number.capabilities.voice, p_sms: number.capabilities.sms,
+      // Product permissions stay voice-only even if Twilio also supports SMS.
+      p_phone_number: number.phoneNumber, p_voice: number.capabilities.voice, p_sms: false,
     });
     if (result.error || !result.data) return present(order);
     return present({ ...order, status: "completed", line_id: result.data });
@@ -143,13 +148,14 @@ export function registerNumberRoutes(routes: FastifyInstance, config: AppConfig,
       const country = parsed.data;
       const profile = await profileFor(request.params.orgId, country);
       const [available, price] = await Promise.all([provider!.available(country), provider!.price(country)]);
-      const candidates = available.filter((number) => number.capabilities.voice && (number.addressRequirements === "none" || profile?.address_sid));
-      if (available.length && !candidates.length) throw new ProvisioningError("number_address_required", "Une adresse validée doit être associée à votre organisation pour commander ces numéros.", 409);
+      const voiceNumbers = available.filter((number) => number.capabilities.voice);
+      const candidates = voiceNumbers.filter((number) => number.addressRequirements === "none" || profile?.address_sid);
+      if (voiceNumbers.length && !candidates.length) throw new ProvisioningError("number_address_required", "Une adresse validée doit être associée à votre organisation pour commander ces numéros locaux.", 409);
       const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
       const quotes = candidates.map((number) => ({
         id: randomUUID(), organization_id: request.params.orgId, user_id: userId, country,
         phone_number: number.phoneNumber, account_sid: config.TWILIO_ACCOUNT_SID!, monthly_price: price.monthlyPrice,
-        currency: price.currency, sms_enabled: number.capabilities.sms, bundle_sid: profile?.bundle_sid ?? null,
+        currency: price.currency, sms_enabled: false, bundle_sid: profile?.bundle_sid ?? null,
         address_sid: profile?.address_sid ?? null, expires_at: expiresAt,
       }));
       if (quotes.length) {
@@ -213,7 +219,6 @@ export function registerNumberRoutes(routes: FastifyInstance, config: AppConfig,
         number = await provider!.purchase({
           phoneNumber: order.phone_number, friendlyName: `onoff-order:${order.id}`,
           voiceUrl: `${base}/webhooks/twilio/voice/inbound`, voiceMethod: "POST",
-          smsUrl: `${base}/webhooks/twilio/messages/inbound`, smsMethod: "POST",
           statusCallback: `${base}/webhooks/twilio/voice/status`, statusCallbackMethod: "POST",
           ...(quote.bundle_sid ? { bundleSid: quote.bundle_sid } : {}), ...(quote.address_sid ? { addressSid: quote.address_sid } : {}),
         });

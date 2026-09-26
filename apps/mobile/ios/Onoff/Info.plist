@@ -63,6 +63,8 @@
     <string>Onoff utilise le microphone pendant vos appels.</string>
     <key>RCTMetroPort</key>
     <string>$(RCT_METRO_PORT)</string>
+    <key>RCTNewArchEnabled</key>
+    <true/>
     <key>TwilioVoiceExpoVersion</key>
     <string>57.0.0</string>
     <key>UIBackgroundModes</key>
@@ -95,6 +97,8 @@
     <key>UIUserInterfaceStyle</key>
     <string>Light</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+    <key>EXDevMenuShowFloatingActionButton</key>
     <false/>
   </dict>
 </plist>

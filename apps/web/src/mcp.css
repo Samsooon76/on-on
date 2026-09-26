@@ -1,0 +1,32 @@
+.mcp-integrations h3 { display: flex; align-items: center; gap: 9px; }
+.mcp-integrations h4 { margin: 28px 0 12px; font-size: 14px; }
+.mcp-endpoint { display: flex; align-items: end; gap: 12px; margin: 20px 0 12px; }
+.mcp-endpoint label { flex: 1; min-width: 0; }
+.mcp-endpoint input { width: 100%; font-size: 13px; }
+.mcp-connection { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--border, #e4e6eb); }
+.mcp-connection p, .mcp-connection ul { font-size: 12px; color: #647069; margin: 7px 0; line-height: 1.7; }
+.mcp-connection ul { padding-left: 18px; }
+.mcp-draft-row { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left; padding: 15px 0; border: 0; border-bottom: 1px solid #e4e6eb; background: transparent; cursor: pointer; gap: 12px; color: inherit; }
+.mcp-draft-row div { min-width: 0; }
+.mcp-draft-row p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px; font-size: 13px; color: #647069; margin: 6px 0; }
+.mcp-draft-row span { font-size: 11px; color: #526c5e; }
+.mcp-notice { font-size: 13px; line-height: 1.65; background: #f0f6f2; color: #27523a; border-radius: 8px; padding: 12px; }
+.mcp-approval { display: grid; gap: 14px; padding: 4px 0; }
+.mcp-approval > p { margin: 0; font-size: 13px; line-height: 1.7; }
+.mcp-approval dl { margin: 0; display: grid; gap: 12px; }
+.mcp-approval dl div { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; }
+.mcp-approval dt { color: #647069; }.mcp-approval dd { margin: 0; font-weight: 500; }
+.mcp-message { background: #f5f6f5; padding: 18px; border: 1px solid #e4e6eb; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; font-size: 14px; line-height: 1.75; }
+.mcp-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+.mcp-consent-shell { min-height: 100dvh; display: grid; place-items: center; padding: 36px 20px; background: #f7f8f6; }
+.mcp-consent { width: min(100%, 620px); background: white; border: 1px solid #e4e6eb; border-radius: 14px; padding: 32px; }
+.mcp-consent h1 { font-size: 26px; letter-spacing: -.6px; margin: 22px 0 10px; }
+.mcp-consent > p { font-size: 14px; line-height: 1.7; }
+.mcp-consent select { width: 100%; padding: 11px; border: 1px solid #dce1dc; border-radius: 7px; background: white; margin-top: 7px; color: inherit; }
+.mcp-consent fieldset { border: 0; padding: 0; margin: 22px 0; }
+.mcp-consent legend { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+.mcp-checkbox { display: flex; align-items: start; gap: 10px; font-size: 13px; line-height: 1.55; margin: 11px 0; cursor: pointer; }
+.mcp-checkbox input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: #276746; flex-shrink: 0; }
+.mcp-consent-note { display: flex; align-items: start; gap: 10px; background: #f3f6f3; padding: 14px; border-radius: 8px; color: #526358; }
+.mcp-consent-note svg { flex-shrink: 0; margin-top: 3px; }
+@media (max-width: 600px) { .mcp-consent { padding: 22px; }.mcp-endpoint { flex-wrap: wrap; }.mcp-endpoint label { flex-basis: 100%; }.mcp-draft-row p { max-width: 230px; }.mcp-actions .button { width: 100%; justify-content: center; } }

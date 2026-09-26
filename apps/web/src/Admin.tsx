@@ -7,13 +7,13 @@ import { formatPhone } from "./conversation-model";
 import "./admin.css";
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
-type Props = { organizationId: string; userId: string; api: Api; onPurchase(): void; onChanged(): Promise<void>; refreshKey: number };
+type Props = { organizationId: string; userId: string; api: Api; onPurchase(): void; onChanged(): Promise<void>; refreshKey: number; purchaseEnabled: boolean };
 const roles = { admin: "Administrateur", member: "Membre" };
 const statuses = { active: "Actif", suspended: "Suspendu", revoked: "Accès retiré" };
 const errorText = (error: unknown) => error instanceof Error ? error.message : "Une erreur est survenue. Réessayez.";
 const auditLabels: Record<string, string> = { "member.create": "Création d’un utilisateur", "member.update": "Modification d’un utilisateur", "ivr.update": "Configuration du menu vocal", "line_assignment.upsert": "Modification des droits sur une ligne", "line_assignment.revoke": "Retrait d’accès à une ligne", "number.purchase": "Achat d’un numéro" };
 
-export function Admin({ organizationId, userId, api, onPurchase, onChanged, refreshKey }: Props) {
+export function Admin({ organizationId, userId, api, onPurchase, onChanged, refreshKey, purchaseEnabled }: Props) {
   const [tab, setTab] = useState<"members" | "lines" | "roles" | "audit">("members");
   const [data, setData] = useState<AdminSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,12 +65,12 @@ export function Admin({ organizationId, userId, api, onPurchase, onChanged, refr
       <p className="admin-footnote">{activeMembers.length} utilisateur{activeMembers.length > 1 ? "s" : ""} actif{activeMembers.length > 1 ? "s" : ""} · Les droits Appels et SMS se règlent pour chaque numéro.</p>
     </>}
     {data && tab === "lines" && <>
-      <div className="admin-toolbar"><div><h3>Les numéros de votre équipe</h3><p>Attribuez les accès, puis configurez le menu d’accueil.</p></div><button className="button button-primary" onClick={onPurchase}><Plus size={17} />Ajouter un numéro</button></div>
+      <div className="admin-toolbar"><div><h3>Les numéros de votre équipe</h3><p>Attribuez les accès, puis configurez le menu d’accueil.</p></div><button className="button button-primary" disabled={!purchaseEnabled} onClick={onPurchase}><Plus size={17} />Ajouter un numéro</button></div>
       <div className="admin-lines">{data.lines.map((line) => {
         const assignments = data.assignments.filter((a) => a.line_id === line.id && a.status === "active");
         return <article className="admin-line" key={line.id}><div className="admin-line-heading"><span className="admin-line-icon"><Phone size={22} /></span><div><h3>{formatPhone(line.phone_number)}</h3><p>{line.voice_enabled ? "Appels" : "Sans appels"} · {line.sms_enabled ? "SMS" : "Sans SMS"}</p></div><span className={`admin-status ${line.status}`}>{line.status === "active" ? "Actif" : line.status === "suspended" ? "Suspendu" : "Résilié"}</span></div><div className="admin-line-detail"><span>Utilisateurs autorisés</span><b>{assignments.length}</b></div><div className="admin-line-detail"><span><GitBranch size={16} />Menu vocal</span><b>{line.ivr_config.enabled ? `${line.ivr_config.options.length} touches` : "Appel direct"}</b></div><div className="admin-line-actions"><button className="button button-secondary" onClick={() => setLineEditor(line)}>Gérer les accès</button><button className="text-button" disabled={!line.voice_enabled || line.status !== "active"} onClick={() => setIvrEditor(line)}>Configurer l’IVR</button></div></article>;
       })}</div>
-      {!data.lines.length && <EmptyState icon={<Phone size={26} />} title="Votre premier numéro"><p>Ajoutez un numéro, puis attribuez-le aux membres de votre équipe.</p><button className="button button-primary" onClick={onPurchase}>Ajouter un numéro</button></EmptyState>}
+      {!data.lines.length && <EmptyState icon={<Phone size={26} />} title="Votre premier numéro"><p>Ajoutez un numéro, puis attribuez-le aux membres de votre équipe.</p><button className="button button-primary" disabled={!purchaseEnabled} onClick={onPurchase}>Ajouter un numéro</button></EmptyState>}
     </>}
     {tab === "roles" && <div className="admin-permissions"><h3>Des permissions explicites</h3><p>Le rôle s’applique à cet espace. Les droits d’utilisation se règlent séparément sur chaque ligne et s’appliquent au web comme au mobile.</p><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Permission</th><th>Administrateur</th><th>Membre</th></tr></thead><tbody>{[
       ["Créer, suspendre et gérer les utilisateurs", "Autorisé", "Non autorisé"], ["Attribuer les rôles et les lignes", "Autorisé", "Non autorisé"], ["Acheter des numéros et configurer les IVR", "Autorisé", "Non autorisé"], ["Consulter l’historique d’administration", "Autorisé", "Non autorisé"], ["Appeler et consulter les appels", "Selon le droit Appels de la ligne", "Selon le droit Appels de la ligne"], ["Envoyer et consulter les SMS", "Selon le droit SMS de la ligne", "Selon le droit SMS de la ligne"], ["Gérer les contacts de l’espace", "Autorisé", "Autorisé"],

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowUp, ChatCircle, Check, Checks, FileText, Info, MagnifyingGlass, Phone, PhoneIncoming, PhoneOutgoing, PhoneX, Plus, Record, UserPlus, X } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowUp, ChatCircle, Check, Checks, Info, MagnifyingGlass, Phone, PhoneIncoming, PhoneOutgoing, PhoneX, Plus, UserPlus, X } from "@phosphor-icons/react";
 import { Avatar, EmptyState } from "./ui";
 import { buildTimeline, callLabel, formatDuration, formatPhone, isMissedCall, messageStatus, phoneKey, type Contact, type InboxConversation, type MessageRecord } from "./conversation-model";
 
@@ -16,6 +16,7 @@ type Props = {
   locked: boolean;
   pending: boolean;
   canSms: boolean;
+  smsUnavailable: string;
   canCall: boolean;
   segments: number;
   hasMore: boolean;
@@ -73,19 +74,19 @@ export function Conversations(props: Props) {
 
   return <div className={`conversation-workspace${props.number ? " has-thread" : ""}${details ? " has-details" : ""}`}>
     <aside className="inbox-panel" aria-label="Liste des conversations">
-      <div className="inbox-heading"><div><h2>Boîte de réception</h2><span>{unread ? `${unread} non lue${unread > 1 ? "s" : ""}` : "Tous vos échanges"}</span></div><button className="icon-button" onClick={props.onNew} disabled={props.locked} title="Nouvelle conversation" aria-label="Nouvelle conversation"><Plus /></button></div>
+      <div className="inbox-heading"><div><h2>Boîte de réception</h2><span>{unread ? `${unread} non lue${unread > 1 ? "s" : ""}` : "Tous vos échanges"}</span></div><button className="icon-button" onClick={props.onNew} disabled={props.locked || !props.lineNumber} title="Nouvelle conversation" aria-label="Nouvelle conversation"><Plus /></button></div>
       <label className="search-field"><MagnifyingGlass size={17} /><input aria-label="Rechercher une conversation" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher une conversation" /></label>
       <div className="inbox-filters" role="group" aria-label="Filtrer les conversations">
         {([['all', 'Toutes'], ['unread', 'Non lues'], ['missed', 'Manqués']] as const).map(([value, label]) => <button key={value} aria-pressed={filter === value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}{value === "unread" && unread > 0 && <span>{unread}</span>}</button>)}
       </div>
       <div className="inbox-list" aria-busy={props.dataState === "loading"}>
-        {filtered.map((thread) => <button key={thread.key} className={`inbox-row${phoneKey(thread.remoteNumber) === phoneKey(props.number) ? " selected" : ""}${thread.unread ? " unread" : ""}`} disabled={props.locked} aria-pressed={phoneKey(thread.remoteNumber) === phoneKey(props.number)} onClick={() => props.onOpen(thread.remoteNumber, thread.smsConversationId)}>
+        {filtered.map((thread) => <button key={thread.key} className={`inbox-row${phoneKey(thread.remoteNumber) === phoneKey(props.number) ? " selected" : ""}${thread.unread ? " unread" : ""}`} disabled={props.locked || !props.lineNumber} aria-pressed={phoneKey(thread.remoteNumber) === phoneKey(props.number)} onClick={() => props.onOpen(thread.remoteNumber, thread.smsConversationId)}>
           <Avatar name={thread.name ?? thread.remoteNumber} />
           <span className="inbox-row-content"><span className="inbox-row-title"><b>{thread.name ?? formatPhone(thread.remoteNumber)}</b><time dateTime={thread.updatedAt ?? undefined}>{inboxTime(thread.updatedAt)}</time></span><span className="inbox-preview">{thread.lastKind === "call" && <Phone size={13} />}<span>{thread.preview}</span>{thread.unread && <i className="unread-dot" aria-label="Non lue" />}</span></span>
         </button>)}
         {!filtered.length && <EmptyState icon={<ChatCircle size={25} />} title={props.dataState === "loading" ? "Chargement…" : props.dataState === "error" ? "Chargement impossible" : search || filter !== "all" ? "Aucune conversation trouvée" : "Votre boîte de réception est prête"}>
           <p>{props.dataState === "error" ? "Vos échanges n’ont pas pu être récupérés." : search || filter !== "all" ? "Essayez une autre recherche ou un autre filtre." : "Vos SMS et appels se retrouvent ici, par interlocuteur."}</p>
-          {props.dataState === "error" ? <button className="text-button" onClick={props.onRetry}>Réessayer</button> : !search && filter === "all" && props.dataState === "ready" && <button className="text-button" disabled={props.locked} onClick={props.onNew}>Démarrer une conversation</button>}
+          {props.dataState === "error" ? <button className="text-button" onClick={props.onRetry}>Réessayer</button> : !search && filter === "all" && props.dataState === "ready" && <button className="text-button" disabled={props.locked || !props.lineNumber} onClick={props.onNew}>Démarrer une conversation</button>}
         </EmptyState>}
         {props.hasMore && <button className="load-more" disabled={props.loadingMore} onClick={props.onMore}>{props.loadingMore ? "Chargement…" : "Voir les échanges précédents"}</button>}
       </div>
@@ -95,7 +96,7 @@ export function Conversations(props: Props) {
     <section className="thread-panel" aria-label="Conversation">
       {props.number ? <>
         <header className="thread-header">
-          <button className="icon-button mobile-back" aria-label="Retour aux conversations" disabled={props.locked} onClick={props.onBack}><ArrowLeft /></button>
+          <button className="icon-button mobile-back" aria-label="Retour aux conversations" disabled={props.locked || !props.lineNumber} onClick={props.onBack}><ArrowLeft /></button>
           <Avatar name={name} />
           <div className="thread-identity"><h2>{name}</h2><span>{name === formatPhone(props.number) ? "Conversation" : formatPhone(props.number)}</span></div>
           <div className="thread-actions"><button className="button button-secondary thread-call" disabled={!props.canCall} onClick={() => props.onCall(props.number)} title="Appeler cet interlocuteur"><Phone size={18} /><span>Appeler</span></button><button className={`icon-button${details ? " selected" : ""}`} aria-label="Détails de la conversation" aria-expanded={details} onClick={() => setDetails(!details)}><Info /></button></div>
@@ -121,13 +122,13 @@ export function Conversations(props: Props) {
         <div className="composer-container">
           {props.pending && <p className="inline-warning" role="status">L’envoi précédent est à vérifier. Votre message est conservé.</p>}
           <form className="composer" onSubmit={props.onSend}>
-            <label className="composer-label" htmlFor="sms-message"><ChatCircle size={15} />SMS<span>{props.canSms ? "" : "SMS indisponibles sur cette ligne"}</span></label>
-            <textarea id="sms-message" value={props.body} onChange={(event) => props.onBody(event.target.value)} maxLength={1600} rows={2} disabled={props.locked || !props.canSms} placeholder={props.canSms ? `Écrire à ${name}…` : "Cette ligne ne permet pas l’envoi de SMS."} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !props.busy && !props.locked && props.canSms && props.body.trim()) event.currentTarget.form?.requestSubmit(); }} />
+            <label className="composer-label" htmlFor="sms-message"><ChatCircle size={15} />SMS<span>{props.canSms ? "" : props.smsUnavailable}</span></label>
+            <textarea id="sms-message" value={props.body} onChange={(event) => props.onBody(event.target.value)} maxLength={1600} rows={2} disabled={props.locked || !props.canSms} placeholder={props.canSms ? `Écrire à ${name}…` : props.smsUnavailable} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !props.busy && !props.locked && props.canSms && props.body.trim()) event.currentTarget.form?.requestSubmit(); }} />
             <div className="composer-footer"><span className={!props.body.length ? "keyboard-hint" : undefined}>{props.body.length ? `${props.body.length}/1600 · ${props.segments} SMS estimé${props.segments > 1 ? "s" : ""}` : "⌘ / Ctrl + Entrée pour envoyer"}</span><button className="button button-primary send-button" disabled={props.busy || (!props.pending && props.locked) || !props.body.trim() || !props.canSms} type="submit">{props.busy ? "En cours…" : props.pending ? "Vérifier l’envoi" : "Envoyer"}<ArrowUp size={17} /></button></div>
           </form>
-          <p className="composer-note">{props.canSms ? `Envoyé depuis le ${formatPhone(props.lineNumber)}` : "Gérez les capacités de votre ligne dans les réglages."}</p>
+          <p className="composer-note">{props.canSms ? `Envoyé depuis le ${formatPhone(props.lineNumber)}` : props.smsUnavailable}</p>
         </div>
-      </> : <div className="thread-welcome"><div className="welcome-symbol"><ChatCircle size={40} weight="thin" /></div><h2>Choisissez une conversation.</h2><p>Retrouvez les messages et les appels d’un interlocuteur,<br />ou commencez un nouvel échange.</p><button className="button button-primary" disabled={props.locked} onClick={props.onNew}><Plus size={17} />Nouvelle conversation</button><div className="welcome-formats"><span><ChatCircle size={16} />SMS</span><span><Phone size={16} />Appels</span><span className="coming-soon"><Record size={16} />Enregistrements <small>À venir</small></span></div></div>}
+      </> : <div className="thread-welcome"><div className="welcome-symbol"><ChatCircle size={40} weight="thin" /></div><h2>Choisissez une conversation.</h2><p>Retrouvez les messages et les appels d’un interlocuteur,<br />ou commencez un nouvel échange.</p><button className="button button-primary" disabled={props.locked || !props.lineNumber} onClick={props.onNew}><Plus size={17} />Nouvelle conversation</button><div className="welcome-formats"><span><ChatCircle size={16} />SMS</span><span><Phone size={16} />Appels</span></div></div>}
     </section>
 
     {details && props.number && <aside className="conversation-details" aria-label="Détails du contact">
@@ -135,7 +136,6 @@ export function Conversations(props: Props) {
       <div className="details-profile"><Avatar name={name} large /><h3>{name}</h3><span>{formatPhone(props.number)}</span>{!contact && <button className="text-button" onClick={() => props.onAddContact(props.number)}><UserPlus size={16} />Ajouter aux contacts</button>}</div>
       <dl className="details-facts"><div><dt>Téléphone</dt><dd>{formatPhone(props.number)}</dd></div>{contact?.email && <div><dt>Email</dt><dd>{contact.email}</dd></div>}<div><dt>Votre ligne</dt><dd>{formatPhone(props.lineNumber)}</dd></div></dl>
       <div className="details-resources"><h4>Dans cette conversation</h4><button onClick={() => { setEventFilter("message"); setDetails(false); }}><ChatCircle size={18} />Messages <span>{props.messages.length}{props.hasOlderMessages ? "+" : ""}</span></button><button onClick={() => { setEventFilter("call"); setDetails(false); }}><Phone size={18} />Appels <span>{selected?.calls.length ?? 0}</span></button></div>
-      <div className="future-resources"><div><Record size={18} /><FileText size={18} /></div><h4>La suite de vos échanges</h4><p>Les enregistrements et transcriptions prendront place dans ce même fil.</p><span>À venir</span></div>
     </aside>}
   </div>;
 }

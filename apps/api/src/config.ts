@@ -21,6 +21,7 @@ const envSchema = z.object({
   SUPABASE_URL: z.url(),
   SUPABASE_PUBLISHABLE_KEY: z.string().min(10),
   SUPABASE_SECRET_KEY: z.string().optional(),
+  MCP_ENABLED: bool.default(false),
   VOICE_ENABLED: bool.default(false),
   SMS_ENABLED: bool.default(false),
   OPERATIONS_PAUSED: bool.default(false),
@@ -37,6 +38,9 @@ const envSchema = z.object({
   MAX_ACTIVE_CALL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
   MAX_RINGING_DEVICES: z.coerce.number().int().min(1).max(8).default(4),
 }).superRefine((value, ctx) => {
+  if (value.MCP_ENABLED && (!value.SUPABASE_SECRET_KEY || (value.APP_ENV !== "dev" && (!value.API_PUBLIC_URL.startsWith("https://") || !value.WEB_PUBLIC_URL.startsWith("https://"))))) {
+    ctx.addIssue({ code: "custom", path: ["MCP_ENABLED"], message: "Le MCP exige une clé Supabase serveur et des URL HTTPS hors développement." });
+  }
   if (value.VOICE_ENABLED && (!value.TWILIO_ACCOUNT_SID || !value.TWILIO_API_KEY_SID || !value.TWILIO_API_KEY_SECRET || !value.TWILIO_TWIML_APP_SID || !value.TWILIO_AUTH_TOKEN || !value.SUPABASE_SECRET_KEY)) {
     ctx.addIssue({ code: "custom", path: ["VOICE_ENABLED"], message: "La voix exige les credentials Twilio serveur et une clé Supabase serveur." });
   }
