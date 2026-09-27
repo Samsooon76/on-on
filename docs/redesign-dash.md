@@ -2,13 +2,13 @@
 
 ## Direction
 
-La référence est `dash/index.html` : fond blanc, halo lavande en haut à gauche, navigation discrète, cartes aux bordures fines, boutons sombres et accents vert citron. La structure métier reste propre à Onoff : conversations, appels, campagnes, contacts, administration et intégrations.
+La structure vient de `dash/index.html` : navigation discrète, cartes aux bordures fines et boutons sombres. Après la référence pastel fournie par l’utilisateur, le fond associe rose, abricot, jaune doux et bleu ciel uniquement en haut à gauche, puis se fond complètement dans le blanc. La structure métier reste propre à Onoff : conversations, appels, campagnes, contacts, administration et intégrations.
 
 La densité reste adaptée à un outil de travail. Les transitions sont courtes et respectent la réduction des animations. Le thème reste clair, comme la référence.
 
 ## Organisation
 
-- `packages/design-tokens/index.ts` : palette et rayons communs aux trois clients.
+- `packages/design-tokens/index.ts` : palette, rayons et couches du dégradé communs aux trois clients.
 - `packages/design-tokens/theme.css` : variables CSS et police Inter locale pour le web et Chrome.
 - `packages/design-tokens/assets` : Inter variable pour le navigateur, quatre graisses statiques pour iOS/Android, licence OFL.
 - `apps/web/src/dash-theme.css` : disposition, composants, navigation repliable et adaptation aux petits écrans. Les styles des modules utilisent les couleurs communes.
@@ -31,7 +31,7 @@ Inter est fourni localement, sans requête vers un service de polices. Les icôn
 
 **Chrome** : popup, champs, messages de retour, réglages, sélection de numéro et tags. Les liens et les permissions du manifeste sont conservés.
 
-Le nouveau dégradé natif utilise `expo-linear-gradient`. Une reconstruction native est nécessaire pour les installations de développement précédentes. Le verrou CocoaPods est à jour et le build iOS du simulateur a été reconstruit.
+Le dégradé est défini une seule fois dans `ambientGradient`. Ses cinq couches radiales deviennent transparentes au plus tard à 640 px du bord gauche et 420 px du bord supérieur. Le web et Chrome utilisent le CSS généré ; iOS/Android utilisent `experimental_backgroundImage`, pris en charge par la version React Native 0.86.3 installée. Le fond sous-jacent reste blanc, sans voile coloré en bas de page.
 
 ## Vérification du 27 septembre 2026
 
@@ -60,3 +60,13 @@ Les fixtures et captures de contrôle restent dans `output/playwright/`. Elles n
 Aucun appareil ou émulateur Android n’est disponible sur cet hôte. L’export du bundle Android réussit, mais sa validation visuelle native reste à faire sur appareil. La recette ne comprend pas de nouveaux appels ou SMS réels.
 
 L’hôte utilise Node 26 alors que le dépôt demande Node 24. Expo signale un décalage préexistant de `expo-build-properties` (57.0.20 installé, 57.0.22 conseillé), et Vite signale la taille du bundle principal. Ces avertissements n’ont pas empêché les validations ci-dessus.
+
+## Ajustement du dégradé
+
+Les contrôles et les bordures sont désormais neutres. Le dégradé pastel reste dans le coin supérieur gauche sur toutes les surfaces, y compris la connexion et les feuilles mobiles. Les cartes de ligne sont blanches.
+
+Validation de cette passe : builds web et Chrome, TypeScript mobile et exports Hermes iOS/Android réussis ; aperçus web vérifiés à 320, 390 et 1440 px et popup Chrome contrôlé. Le rendu natif du dégradé a été observé dans le simulateur iOS ; Android reste validé par l’export du bundle.
+
+- [Dégradé final sur ordinateur](../output/playwright/pastel-corner-desktop.png)
+- [Petit écran](../output/playwright/pastel-corner-390.png)
+- [Extension Chrome](../output/playwright/pastel-corner-extension.png)

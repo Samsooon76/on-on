@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { palette, radius } from "./index.ts";
+import { ambientGradient, palette, radius } from "./index.ts";
 
 const tokens = {
   ink: palette.ink, muted: palette.muted, accent: palette.accent,
@@ -23,11 +23,10 @@ writeFileSync(new URL("./theme.css", import.meta.url), `/* Generated from index.
 :root {
 ${Object.entries(tokens).map(([key, value]) => `  --${key}: ${value};`).join("\n")}
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --shadow-card: 0 2px 4px rgb(45 27 55 / 3%);
-  --shadow-overlay: 0 20px 65px rgb(45 27 55 / 14%);
-  --wash: radial-gradient(ellipse 600px 440px at 0 0, #e6c9e8 0%, #ead9f0 25%, #f5eff9 65%, transparent 100%);
-  --highlight: linear-gradient(110deg, #a2f2b3, #d5f0a0 60%, #f5f386);
-  --gradient-text: linear-gradient(105deg, #9460b6, #b667a5 48%, #b17630);
+  --shadow-card: 0 2px 4px rgb(0 0 0 / 3%);
+  --shadow-overlay: 0 20px 65px rgb(0 0 0 / 14%);
+  --wash: ${ambientGradient};
+  --gradient-text: linear-gradient(100deg, #b368d6 1%, #d77fc6 38%, #ec8eab 64%, #ecc42e 99%);
   color-scheme: light;
 }
 `);

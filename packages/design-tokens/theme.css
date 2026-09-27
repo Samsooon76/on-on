@@ -8,13 +8,13 @@
 }
 :root {
   --ink: #242424;
-  --muted: #6E6873;
-  --accent: #28232D;
-  --accent-dark: #17131C;
-  --accent-soft: #EEE7F2;
+  --muted: #626262;
+  --accent: #242424;
+  --accent-dark: #171717;
+  --accent-soft: #EFEFEF;
   --canvas: #FFFFFF;
-  --surface: #F7F5F8;
-  --line: #E8E3EB;
+  --surface: #F5F5F5;
+  --line: #E7E7E7;
   --lavender: #F0E5F4;
   --violet: #84549A;
   --lime: #DDF3A0;
@@ -28,10 +28,9 @@
   --radius-card: 12px;
   --radius-dialog: 18px;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --shadow-card: 0 2px 4px rgb(45 27 55 / 3%);
-  --shadow-overlay: 0 20px 65px rgb(45 27 55 / 14%);
-  --wash: radial-gradient(ellipse 600px 440px at 0 0, #e6c9e8 0%, #ead9f0 25%, #f5eff9 65%, transparent 100%);
-  --highlight: linear-gradient(110deg, #a2f2b3, #d5f0a0 60%, #f5f386);
-  --gradient-text: linear-gradient(105deg, #9460b6, #b667a5 48%, #b17630);
+  --shadow-card: 0 2px 4px rgb(0 0 0 / 3%);
+  --shadow-overlay: 0 20px 65px rgb(0 0 0 / 14%);
+  --wash: radial-gradient(ellipse 170px 210px at 0px 0px, rgba(228, 200, 248, 0.65) 0%, rgba(228, 200, 248, 0) 100%), radial-gradient(ellipse 220px 290px at 35px 80px, rgba(255, 195, 214, 0.65) 0%, rgba(255, 195, 214, 0) 100%), radial-gradient(ellipse 240px 260px at 165px 0px, rgba(255, 222, 166, 0.8) 0%, rgba(255, 222, 166, 0) 100%), radial-gradient(ellipse 310px 260px at 330px 0px, rgba(196, 223, 255, 0.75) 0%, rgba(196, 223, 255, 0) 100%), radial-gradient(ellipse 200px 300px at 0px 120px, rgba(255, 205, 183, 0.4) 0%, rgba(255, 205, 183, 0) 100%);
+  --gradient-text: linear-gradient(100deg, #b368d6 1%, #d77fc6 38%, #ec8eab 64%, #ecc42e 99%);
   color-scheme: light;
 }

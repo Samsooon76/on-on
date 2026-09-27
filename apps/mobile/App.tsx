@@ -1,5 +1,5 @@
 import { useFonts } from "expo-font";
-import { AmbientBackground, LineHighlight } from "./src/theme";
+import { AmbientBackground } from "./src/theme";
 import { createClient, type Session } from "@supabase/supabase-js";
 import mobilePackage from "./package.json";
 import { ApiClientError, buildInbox, createApiClient, getSmsSegmentInfo, phoneKey, type ApiPage, type CallRecord, type Contact, type Conversation, type InboxConversation } from "@onoff/api-client";
@@ -1042,7 +1042,6 @@ function MobileApp() {
 
   const loading = <View style={{ padding: 40, alignItems: "center", gap: 12 }}><ActivityIndicator color={palette.accent} /><Text style={styles.rowMeta}>Chargement de votre espace…</Text></View>;
   const lineOverview = <Touch accessibilityLabel="Voir les réglages de votre ligne" style={styles.lineOverview} onPress={() => changeTab("settings")}>
-    <LineHighlight />
     <View style={styles.lineIcon}><Icon name="phone-portrait-outline" color={palette.accent} /></View>
     <View style={styles.rowCopy}><Text style={styles.lineLabel}>{activeLine ? "Votre ligne professionnelle" : "Votre espace professionnel"}</Text><Text style={styles.lineNumber}>{activeLine?.phone_number ?? "Aucune ligne attribuée"}</Text></View>
     <Icon name="chevron-forward" size={17} color={palette.muted} />
