@@ -52,6 +52,16 @@ L'hôte n'a pas Xcode complet (seuls les Command Line Tools sont sélectionnés)
 
 ## Push et essais réels requis
 
+### Aperçu sur iPhone avec une équipe Apple personnelle
+
+Une équipe Apple personnelle ne peut pas signer la capacité Push Notifications demandée par le plugin Twilio. Pour installer l'app et parcourir les écrans sur un iPhone branché au Mac, lancer depuis la racine du dépôt avec Node 24.21.0 :
+
+```sh
+pnpm --filter @onoff/mobile ios:personal
+```
+
+La commande retire temporairement `aps-environment`, démarre Metro, compile et installe l'app. Garder le terminal ouvert pendant l'essai ; `Ctrl-C` rétablit le fichier iOS d'origine. Elle désactive aussi l'enregistrement PushKit et l'inscription aux appels entrants dans ce seul aperçu ; les appels sortants restent disponibles si le serveur et la ligne sont configurés. Le téléphone doit avoir le mode développeur activé et le projet Xcode doit être signé avec l'équipe personnelle. Pour les appels entrants et une distribution iOS, utiliser un compte Apple Developer avec les capacités APNs/VoIP et les credentials Twilio correspondants.
+
 - iOS : compte Apple Developer, Team ID, signature, App ID avec Push Notifications, entitlement PushKit/VoIP et credential APNs Twilio correspondant à l'environnement. Les profils EAS développement et démo sélectionnent les environnements APNs development et production.
 - Android : projet Firebase, `google-services.json` privé correspondant au package, FCM activé et credential FCM Twilio. Fournir son chemin via `GOOGLE_SERVICES_FILE`; ne pas versionner le fichier.
 - API : définir `TWILIO_PUSH_CREDENTIAL_SID_IOS` et `TWILIO_PUSH_CREDENTIAL_SID_ANDROID` dans le gestionnaire de secrets serveur. L'API inclut le SID correspondant dans le VoiceGrant natif; l'appareil n'est annoncé comme joignable qu'après son enregistrement.

@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowBendUpLeft, ArrowCounterClockwise, ArrowClockwise, ArrowRight, Check, Clock, FloppyDisk, GearSix, GitBranch, Headset, Microphone, Phone, PhoneDisconnect, Plus, Trash, User, Voicemail } from "@phosphor-icons/react";
 import { defaultVoiceFlow, queueConfigSchema, voiceFlowSchema, type AdminLine, type CenterSnapshot, type QueueConfig, type VoiceDestination, type VoiceFlow, type VoiceFlowRecord, type VoiceQueue } from "@onoff/contracts";
 import { Modal } from "./ui";
@@ -30,6 +30,13 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
   const [history, setHistory] = useState<{ past: VoiceFlow[]; present: VoiceFlow; future: VoiceFlow[] }>(() => ({ past: [], present: record ? structuredClone(record.draft) : defaultVoiceFlow(), future: [] }));
   const flow = history.present;
   const [requestedSelection, setSelection] = useState<Selection>({ kind: "greeting" });
+  const inspectorRef = useRef<HTMLElement>(null);
+  const previousSelection = useRef(requestedSelection);
+  useEffect(() => {
+    if (previousSelection.current === requestedSelection) return;
+    previousSelection.current = requestedSelection;
+    if (window.matchMedia("(max-width: 700px)").matches) inspectorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [requestedSelection]);
   const [trail, setTrail] = useState<string[]>([]);
   const [localQueues, setLocalQueues] = useState<VoiceQueue[]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -86,7 +93,9 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
     if (busy) return;
     setBusy(true); setError("");
     try {
-      const config = pruneMenus(flow);
+      // Activation is managed separately from the draft. Publishing always puts
+      // the edited route in service; saving a draft never changes live calls.
+      const config = { ...pruneMenus(flow), enabled: true };
       const parsed = voiceFlowSchema.safeParse(config);
       if (!parsed.success) {
         const issue = parsed.error.issues[0];
@@ -94,7 +103,7 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
           const menu = config.menus[issue.path[1]];
           if (menu) { openMenu(menu.id); if (issue.path[2] === "options" && typeof issue.path[3] === "number") setSelection({ kind: "branch", menuId: menu.id, index: issue.path[3] }); }
         }
-        throw new Error(issue?.path.includes("label") ? "Donnez un nom à chaque branche." : issue?.path.includes("queueId") ? "Choisissez l’agent ou la file de cette branche." : issue?.path.at(-1) === "options" ? "Ajoutez au moins une branche à ce menu." : issue?.message);
+        throw new Error(issue?.path.includes("label") ? "Donnez un nom à chaque choix." : issue?.path.includes("queueId") ? "Choisissez l’agent ou la file de ce choix." : issue?.path.at(-1) === "options" ? "Ajoutez au moins un choix à ce menu." : issue?.message);
       }
       const referenced = referencedQueueIds(config);
       const pending = localQueues.filter(queue => referenced.has(queue.id));
@@ -123,14 +132,15 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
     onChange={next => change(replaceDestination(flow, target, next))} onNewMenu={() => createMenu(target)} canAddMenu={flow.menus.length < 12}
     onNewQueue={newQueue} onEditQueue={editQueue} onOpenMenu={openMenu}/>;
   const routeName = (destination: VoiceDestination) => destinationName(destination, allQueues, flow.menus);
-  const panelTitle = selection.kind === "greeting" ? "Message d’accueil" : selection.kind === "settings" ? "Réglages du parcours" : selection.kind === "hours" ? "Horaires d’ouverture" : selection.kind === "menu" ? selectedMenu?.name ?? "Menu" : selection.kind === "branch" ? `Branche · touche ${selectedOption?.digit ?? ""}` : selection.kind === "fallback" ? "Sans réponse au menu" : selection.kind === "closed" ? "En dehors des horaires" : "Après l’accueil";
+  const panelTitle = selection.kind === "greeting" ? "Message d’accueil" : selection.kind === "settings" ? "Réglages du parcours" : selection.kind === "hours" ? "Horaires d’ouverture" : selection.kind === "menu" ? selectedMenu?.name ?? "Menu" : selection.kind === "branch" ? `Choix · touche ${selectedOption?.digit ?? ""}` : selection.kind === "fallback" ? "Sans réponse au menu" : selection.kind === "closed" ? "En dehors des horaires" : "Après l’accueil";
 
   return <Modal title="Votre parcours d’appel" className="ivr-builder" onClose={onClose} busy={busy}>
     <fieldset className="ivr-builder-fields" disabled={busy}>
       <div className="ivr-toolbar">
-        <div className="ivr-identity"><label><span className="sr-only">Nom de l’IVR</span><input maxLength={80} value={flow.name} onChange={event => change({ ...flow, name: event.target.value })}/></label><span>{formatPhone(line.phone_number) || "Accueil téléphonique"}<i/>{record?.published?.enabled ? "Version publiée disponible" : "Brouillon"}</span></div>
-        <div className="ivr-toolbar-actions"><div className="ivr-history"><button type="button" className="icon-button" title="Annuler la modification" aria-label="Annuler la modification" disabled={!history.past.length || busy} onClick={undo}><ArrowCounterClockwise/></button><button type="button" className="icon-button" title="Rétablir la modification" aria-label="Rétablir la modification" disabled={!history.future.length || busy} onClick={redo}><ArrowClockwise/></button></div><button type="button" className="button button-secondary ivr-save" onClick={() => void save(false)}><FloppyDisk/>Enregistrer</button><button type="button" className="button button-primary" onClick={() => void save(true)}>{busy ? "Enregistrement…" : flow.enabled ? "Publier le parcours" : "Désactiver l’IVR"}<ArrowRight/></button></div>
+        <div className="ivr-identity"><label><span className="sr-only">Nom de l’IVR</span><input maxLength={80} value={flow.name} onChange={event => change({ ...flow, name: event.target.value })}/></label><span>{formatPhone(line.phone_number) || "Accueil téléphonique"}<i/>{record?.published?.enabled ? "IVR activé" : record?.published ? "IVR désactivé" : "Non publié"}</span></div>
+        <div className="ivr-toolbar-actions"><div className="ivr-history"><button type="button" className="icon-button" title="Annuler la modification" aria-label="Annuler la modification" disabled={!history.past.length || busy} onClick={undo}><ArrowCounterClockwise/></button><button type="button" className="icon-button" title="Rétablir la modification" aria-label="Rétablir la modification" disabled={!history.future.length || busy} onClick={redo}><ArrowClockwise/></button></div><button type="button" className="button button-secondary ivr-save" onClick={() => void save(false)}><FloppyDisk/>Enregistrer le brouillon</button><button type="button" className="button button-primary" onClick={() => void save(true)}>{busy ? "Enregistrement…" : "Publier et activer"}<ArrowRight/></button></div>
       </div>
+      <div className="ivr-guide" aria-label="Étapes de configuration"><button type="button" onClick={() => { setTrail([]); setSelection({ kind: "greeting" }); }}><b>1</b><span>Message d’accueil</span></button><ArrowRight/><button type="button" onClick={() => { if (rootMenu) openMenu(rootMenu.id); else setSelection({ kind: "entry" }); }}><b>2</b><span>Choix des touches</span></button><ArrowRight/><button type="button" onClick={() => { if (rootMenu?.options.length) { setTrail([]); setSelection({ kind: "branch", menuId: rootMenu.id, index: 0 }); } else setSelection({ kind: "entry" }); }}><b>3</b><span>Destination des appels</span></button></div>
       {error && <p className="ivr-error" role="alert">{error}</p>}
       <div className="ivr-workspace">
         <div className="ivr-canvas">
@@ -139,24 +149,25 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
             {!path.length && <><Node selected={selection.kind === "greeting"} icon={<Microphone/>} eyebrow="Appel entrant · Accueillir" title="Message d’accueil" description={flow.greetingAudioUrl ? "Annonce audio" : flow.greeting || "Aucun message d’accueil"} onClick={() => setSelection({ kind: "greeting" })}/><div className="ivr-wire"/></>}
             {path.length > 0 && <><button type="button" className="ivr-back" onClick={() => { setTrail(path.slice(0, -1)); setSelection({ kind: "greeting" }); }}><ArrowBendUpLeft/>Niveau précédent</button><div className="ivr-wire"/></>}
             {visibleMenu ? <>
-              <Node selected={selection.kind === "menu" && selection.menuId === visibleMenu.id} icon={<GitBranch/>} eyebrow={path.length ? "Sous-menu" : "02 · Orienter"} title={visibleMenu.name} description={visibleMenu.prompt} onClick={() => setSelection({ kind: "menu", menuId: visibleMenu.id })}/>
+              <Node selected={selection.kind === "menu" && selection.menuId === visibleMenu.id} icon={<GitBranch/>} eyebrow={path.length ? "Sous-menu" : "Choix des touches"} title={visibleMenu.name} description={visibleMenu.prompt} onClick={() => setSelection({ kind: "menu", menuId: visibleMenu.id })}/>
               <div className="ivr-wire"/>
-              <div className="ivr-branches" role="group" aria-label={`Branches de ${visibleMenu.name}`}>
-                {visibleMenu.options.map((option, index) => <div className="ivr-branch" key={option.digit}>
-                  <button type="button" className={`ivr-branch-condition ${selection.kind === "branch" && selection.menuId === visibleMenu.id && selection.index === index ? "selected" : ""}`} onClick={() => setSelection({ kind: "branch", menuId: visibleMenu.id, index })}><kbd>{option.digit}</kbd><span>{option.label || "Nommer la branche"}</span></button>
-                  <div className="ivr-wire"/>
-                  <Node compact selected={selection.kind === "branch" && selection.menuId === visibleMenu.id && selection.index === index} icon={destinationIcon(option.destination)} eyebrow={option.destination.type === "menu" ? "Sous-menu" : option.destination.type === "queue" ? "Faire sonner" : "Destination"} title={routeName(option.destination)} onClick={() => setSelection({ kind: "branch", menuId: visibleMenu.id, index })}/>
-                  {option.destination.type === "menu" ? <button type="button" className="ivr-continue" onClick={() => { if (option.destination.type === "menu") openMenu(option.destination.menuId); }}>Ouvrir les branches <ArrowRight/></button> : <button type="button" className="ivr-extend" aria-label={`Ajouter un sous-menu après la touche ${option.digit}`} title="Ajouter un sous-menu" disabled={flow.menus.length >= 12} onClick={() => createMenu({ kind: "branch", menuId: visibleMenu.id, index })}><Plus/></button>}
+              <div className="ivr-branches" role="group" aria-label={`Choix de ${visibleMenu.name}`}>
+                <p>Quand l’appelant appuie sur une touche :</p>
+                {visibleMenu.options.map((option, index) => <div className="ivr-branch-row" key={option.digit}>
+                  <button type="button" className={`ivr-branch-condition ${selection.kind === "branch" && selection.menuId === visibleMenu.id && selection.index === index ? "selected" : ""}`} onClick={() => setSelection({ kind: "branch", menuId: visibleMenu.id, index })}><kbd>{option.digit}</kbd><span>{option.label || "Nommer ce choix"}</span></button>
+                  <ArrowRight aria-hidden="true"/>
+                  <button type="button" className="ivr-branch-destination" onClick={() => setSelection({ kind: "branch", menuId: visibleMenu.id, index })}>{destinationIcon(option.destination)}<span>{routeName(option.destination)}</span></button>
+                  {option.destination.type === "menu" && <button type="button" className="ivr-continue" onClick={() => { if (option.destination.type === "menu") openMenu(option.destination.menuId); }}>Ouvrir <ArrowRight/></button>}
                 </div>)}
-                <div className="ivr-branch ivr-branch-add"><button type="button" className="ivr-add" disabled={visibleMenu.options.length >= 10} onClick={() => addBranch(visibleMenu)}><Plus/><span>Ajouter une branche</span><small>{visibleMenu.options.length >= 10 ? "10 touches utilisées" : "Une touche, une destination"}</small></button></div>
+                <button type="button" className="ivr-add" disabled={visibleMenu.options.length >= 10} onClick={() => addBranch(visibleMenu)}><Plus/><span>Ajouter un choix</span></button>
               </div>
               <button type="button" className={`ivr-fallback ${selection.kind === "fallback" && selection.menuId === visibleMenu.id ? "selected" : ""}`} onClick={() => setSelection({ kind: "fallback", menuId: visibleMenu.id })}><Clock/>Sans choix après {visibleMenu.maxAttempts} tentative{visibleMenu.maxAttempts > 1 ? "s" : ""}<ArrowRight/>{routeName(visibleMenu.fallback)}</button>
-            </> : <><Node icon={destinationIcon(flow.entry)} eyebrow="02 · Destination" title={routeName(flow.entry)} selected={selection.kind === "entry"} onClick={() => setSelection({ kind: "entry" })}/><button type="button" className="ivr-create-menu" onClick={() => createMenu({ kind: "entry" })} disabled={flow.menus.length >= 12}><Plus/>Ajouter des branches</button></>}
+            </> : <><Node icon={destinationIcon(flow.entry)} eyebrow="Destination des appels" title={routeName(flow.entry)} selected={selection.kind === "entry"} onClick={() => setSelection({ kind: "entry" })}/><button type="button" className="ivr-create-menu" onClick={() => createMenu({ kind: "entry" })} disabled={flow.menus.length >= 12}><Plus/>Ajouter des choix</button></>}
             {flow.schedule.enabled && !path.length && <button type="button" className="ivr-fallback" onClick={() => setSelection({ kind: "closed" })}><Clock/>En dehors des horaires<ArrowRight/>{routeName(flow.schedule.closed)}</button>}
           </div>
-          <p className="ivr-canvas-hint">Cliquez sur un bloc pour le modifier. Ajoutez vos choix avec +.</p>
+          <p className="ivr-canvas-hint">Sélectionnez un élément du parcours pour modifier ses réglages à droite.</p>
         </div>
-        <aside className="ivr-inspector" aria-label="Modifier le bloc sélectionné">
+        <aside ref={inspectorRef} className="ivr-inspector" aria-label="Modifier le bloc sélectionné">
           <div className="ivr-inspector-heading"><span>PERSONNALISER</span><h3>{panelTitle}</h3></div>
           <div className="ivr-inspector-body">
             {selection.kind === "greeting" && <>
@@ -183,7 +194,7 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
               <label className="field-label">Nombre de tentatives<select value={selectedMenu.maxAttempts} onChange={event => patchMenu(selectedMenu.id, { maxAttempts: Number(event.target.value) })}>{[1, 2, 3].map(count => <option key={count}>{count}</option>)}</select></label>
             </>}
             {address && selectedDestination && picker(address, selectedDestination)}
-            {selection.kind === "branch" && selectedOption && <button type="button" className="ivr-delete" onClick={() => { change(removeBranch(flow, selection.menuId, selection.index)); setSelection({ kind: "menu", menuId: selection.menuId }); }}><Trash/>Supprimer cette branche</button>}
+            {selection.kind === "branch" && selectedOption && <button type="button" className="ivr-delete" onClick={() => { change(removeBranch(flow, selection.menuId, selection.index)); setSelection({ kind: "menu", menuId: selection.menuId }); }}><Trash/>Supprimer ce choix</button>}
             {selection.kind === "hours" && <>
               <label className="ivr-toggle"><input type="checkbox" checked={flow.schedule.enabled} onChange={event => change({ ...flow, schedule: { ...flow.schedule, enabled: event.target.checked } })}/><span>Définir des horaires d’ouverture</span></label>
               {!flow.schedule.enabled ? <p className="ivr-help">Ce parcours accueille les appels à toute heure.</p> : <>
@@ -194,8 +205,7 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
               </>}
             </>}
             {selection.kind === "settings" && <>
-              <label className="ivr-toggle"><input type="checkbox" checked={flow.enabled} onChange={event => change({ ...flow, enabled: event.target.checked })}/><span>Activer ce parcours</span></label>
-              {!flow.enabled && <p className="ivr-help">La publication rétablira les appels directs sur le numéro.</p>}
+              <p className="ivr-help">Pour activer ou désactiver le menu sans modifier ce brouillon, utilisez l’interrupteur sur la carte du numéro.</p>
               <label className="field-label">Annonce de messagerie<textarea rows={4} maxLength={1000} value={flow.voicemailGreeting} onChange={event => change({ ...flow, voicemailGreeting: event.target.value })}/></label>
               <label className="field-label">Durée maximale du message (secondes)<input type="number" min={10} max={300} value={flow.maxRecordingSeconds} onChange={event => change({ ...flow, maxRecordingSeconds: Number(event.target.value) })}/></label>
               <details className="ivr-details"><summary>Renvois vers un numéro externe</summary><label className="field-label">Durée de sonnerie (secondes)<input type="number" min={5} max={60} value={flow.ringTimeout} onChange={event => change({ ...flow, ringTimeout: Number(event.target.value) })}/></label><label className="field-label">Sans réponse<select value={flow.noAnswer} onChange={event => change({ ...flow, noAnswer: event.target.value as VoiceFlow["noAnswer"] })}><option value="voicemail">Messagerie vocale</option><option value="hangup">Fin de l’appel</option></select></label></details>
@@ -204,13 +214,13 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
           </div>
         </aside>
       </div>
-      <div className="ivr-bottom"><span><Check/>Les modifications restent en brouillon jusqu’à leur publication.</span><span>{flow.menus.reduce((total, menu) => total + menu.options.length, 0)} branche{flow.menus.reduce((total, menu) => total + menu.options.length, 0) > 1 ? "s" : ""} · {flow.menus.length} menu{flow.menus.length > 1 ? "s" : ""}</span></div>
+      <div className="ivr-bottom"><span><Check/>Enregistrer garde vos changements en brouillon. Publier les applique aux nouveaux appels et active l’IVR.</span><span>{flow.menus.reduce((total, menu) => total + menu.options.length, 0)} choix · {flow.menus.length} menu{flow.menus.length > 1 ? "s" : ""}</span></div>
     </fieldset>
   </Modal>;
 }
 
-function Node({ icon, eyebrow, title, description, onClick, selected = false, compact = false }: { icon: ReactNode; eyebrow: string; title: string; description?: string; onClick(): void; selected?: boolean; compact?: boolean }) {
-  return <button type="button" className={`ivr-node ${selected ? "selected" : ""} ${compact ? "compact" : ""}`} onClick={onClick}><span className="ivr-node-icon">{icon}</span><span className="ivr-node-copy"><small>{eyebrow}</small><strong>{title}</strong>{description && <span>{description}</span>}</span></button>;
+function Node({ icon, eyebrow, title, description, onClick, selected = false }: { icon: ReactNode; eyebrow: string; title: string; description?: string; onClick(): void; selected?: boolean }) {
+  return <button type="button" className={`ivr-node ${selected ? "selected" : ""}`} onClick={onClick}><span className="ivr-node-icon">{icon}</span><span className="ivr-node-copy"><small>{eyebrow}</small><strong>{title}</strong>{description && <span>{description}</span>}</span></button>;
 }
 
 function DestinationPicker({ value, queues, localIds, members, menus, onChange, onNewMenu, canAddMenu, onNewQueue, onEditQueue, onOpenMenu }: {
@@ -245,7 +255,7 @@ function DestinationPicker({ value, queues, localIds, members, menus, onChange, 
     </>}
     {(kind === "agent" || kind === "queue") && currentQueue && localIds.includes(currentQueue.id) && <details className="ivr-details"><summary>Attente et débordement</summary><label className="field-label">Attente maximale (secondes)<input type="number" min={15} max={3600} value={currentQueue.config.maxWaitSeconds} onChange={event => onEditQueue(currentQueue.id, { maxWaitSeconds: Number(event.target.value) })}/></label><label className="field-label">Sonnerie par agent (secondes)<input type="number" min={5} max={60} value={currentQueue.config.ringTimeout} onChange={event => onEditQueue(currentQueue.id, { ringTimeout: Number(event.target.value) })}/></label><p className="ivr-help">Sans agent disponible à la fin de l’attente, l’appel passe en messagerie. Les annonces et le débordement se règlent aussi dans Files d’attente.</p></details>}
     {value.type === "number" && <label className="field-label">Numéro de destination<input type="tel" autoFocus placeholder="+33123456789" value={value.number} onChange={event => onChange({ type: "number", number: event.target.value.replace(/[\s().-]/g, "") })}/><small>Utilisez le format international avec +.</small></label>}
-    {value.type === "menu" && <><button type="button" className="button button-secondary" onClick={() => onOpenMenu(value.menuId)}>Modifier les branches<ArrowRight/></button><label className="field-label">Menu de destination<select value={value.menuId} onChange={event => onChange({ type: "menu", menuId: event.target.value })}>{menus.map(menu => <option key={menu.id} value={menu.id}>{menu.name}</option>)}</select></label></>}
+    {value.type === "menu" && <><button type="button" className="button button-secondary" onClick={() => onOpenMenu(value.menuId)}>Modifier les choix<ArrowRight/></button><label className="field-label">Menu de destination<select value={value.menuId} onChange={event => onChange({ type: "menu", menuId: event.target.value })}>{menus.map(menu => <option key={menu.id} value={menu.id}>{menu.name}</option>)}</select></label></>}
     {value.type === "voicemail" && <p className="ivr-help">L’appelant laisse un message. Vous le retrouvez dans Messages vocaux.</p>}
     {value.type === "hangup" && <p className="ivr-help">Un message d’au revoir est lu, puis l’appel se termine.</p>}
   </div>;

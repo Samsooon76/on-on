@@ -16,6 +16,8 @@ import { TagManager } from "./Tags";
 import { CallTranscript } from "./CallTranscript";
 import type { TranscriptTarget } from "@onoff/api-client";
 import { CallDialog, NewConversation } from "./ConversationDialogs";
+import { CallCreateActions, type CallActionContext } from "./CallCreateActions";
+import { CallFollowups } from "./CallFollowups";
 import { Avatar, EmptyState, Modal } from "./ui";
 import { buildInbox, formatPhone, phoneKey, type Contact, type CallRecord, type Conversation, type MessageRecord } from "./conversation-model";
 import { normalizePhoneNumber, type ServiceStatus } from "@onoff/contracts";
@@ -80,7 +82,7 @@ export default function App() {
   const historyScope = useRef("");
   const historyExpanded = useRef(false);
   const smsSubmitting = useRef(false);
-  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings" | "admin" | "center" | "statistics">(() => (new URLSearchParams(window.location.search).has("mcpSms") || new URLSearchParams(window.location.search).get("settings") === "tags") ? "settings" : "conversations");
+  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings" | "admin" | "center" | "statistics" | "followups">(() => (new URLSearchParams(window.location.search).has("mcpSms") || new URLSearchParams(window.location.search).get("settings") === "tags") ? "settings" : "conversations");
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
@@ -102,8 +104,10 @@ export default function App() {
   const [voiceTabOwner, setVoiceTabOwner] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "connecting" | "ringing" | "active">("idle");
   const [providerCallSid, setProviderCallSid] = useState("");
+  const [callContext, setCallContext] = useState<CallActionContext | null>(null);
+  const [callEnded, setCallEnded] = useState(false);
   const [transcriptTarget, setTranscriptTarget] = useState<TranscriptTarget | null>(null);
-  useEffect(() => { setTranscriptTarget(null); setProviderCallSid(""); }, [session?.user.id, selectedOrg, selectedLineId]);
+  useEffect(() => { setTranscriptTarget(null); setProviderCallSid(""); setCallContext(null); setCallEnded(false); }, [session?.user.id, selectedOrg, selectedLineId]);
   const [incomingFrom, setIncomingFrom] = useState("");
   const [muted, setMuted] = useState(false);
   const voiceClient = useRef<VoiceClient | null>(null);
@@ -231,7 +235,7 @@ export default function App() {
 
   function openCall(number = ""): void {
     if (powerDialerLocked || callSubmitting.current) { setActiveTab("powerdialer"); return; }
-    if (voiceState === "idle" && !incomingFrom) setDestination(number);
+    if (voiceState === "idle" && !incomingFrom) { setDestination(number); setCallEnded(false); setCallContext(null); setProviderCallSid(""); }
     setDialerOpen(true);
   }
 
@@ -997,6 +1001,7 @@ export default function App() {
   }
 
   function handleVoiceEvent(event: VoiceEvent) {
+    const wasPowerDialer = powerDialerOwnsCall.current;
     if (["incoming", "connecting", "ringing", "active"].includes(event.type)) voiceActivity.current = true;
     if (event.type === "ended") voiceActivity.current = false;
     if (powerDialerOwnsCall.current || ["incoming", "unavailable", "reconnecting"].includes(event.type)) {
@@ -1006,14 +1011,14 @@ export default function App() {
     switch (event.type) {
       case "ready": void setVoiceRegistration(true); setVoiceStatus("Prête à appeler"); break;
       case "unavailable": void setVoiceRegistration(false); setVoiceStatus(event.message); setNotice(event.message); break;
-      case "incoming": setDestination(event.from); setIncomingFrom(event.from); setVoiceState("ringing"); setDialerOpen(true); setVoiceStatus("Appel entrant"); break;
+      case "incoming": setCallContext({ key: crypto.randomUUID(), number: event.from }); setCallEnded(false); setProviderCallSid(""); setDestination(event.from); setIncomingFrom(event.from); setVoiceState("ringing"); setDialerOpen(true); setVoiceStatus("Appel entrant"); break;
       case "connecting": setProviderCallSid(""); setVoiceState("connecting"); setVoiceStatus("Connexion en cours…"); break;
       case "ringing": setVoiceState("ringing"); setVoiceStatus("Le destinataire sonne…"); break;
-      case "active": setProviderCallSid(event.providerCallSid ?? ""); setVoiceState("active"); setIncomingFrom(""); setVoiceStatus("En communication"); break;
+      case "active": setProviderCallSid(event.providerCallSid ?? ""); setCallContext(context => context && event.providerCallSid ? { ...context, providerCallSid: event.providerCallSid } : context); setVoiceState("active"); setIncomingFrom(""); setVoiceStatus("En communication"); break;
       case "reconnecting": setVoiceStatus("Reconnexion de l’appel…"); break;
       case "reconnected": setVoiceState("active"); setVoiceStatus("En communication"); break;
       case "ended":
-        setVoiceState("idle"); setIncomingFrom(""); setMuted(false); setDialerOpen(false);
+        setVoiceState("idle"); setIncomingFrom(""); setMuted(false); setCallEnded(!wasPowerDialer); setDialerOpen(!wasPowerDialer);
         setVoiceStatus(event.reason === "completed" ? "Appel terminé" : "Appel interrompu");
         if (selectedOrg) {
           const refreshStartedAt = Date.now();
@@ -1084,6 +1089,8 @@ export default function App() {
       if (!client) throw new Error("La ligne vocale n’a pas pu s’enregistrer.");
       assertCallStillAllowed();
       powerDialerOwnsCall.current = fromPowerDialer;
+      setCallContext({ key: intent.id, number: normalizedDestination, intentId: intent.id });
+      setCallEnded(false); setProviderCallSid(""); setDestination(normalizedDestination);
       transportStarted = true;
       await client.startCall({ destination: normalizedDestination, intentId: intent.id });
       unusedIntentId = null;
@@ -1131,7 +1138,7 @@ export default function App() {
   const activeDevices = devices.filter((device) => device.organization_id === selectedOrg);
   const unreadCount = conversations.filter((conversation) => conversation.unread).length;
   const duplicateContact = normalizePhoneNumber(contactPhone) ? contacts.find((contact) => contact.id !== editingContact?.id && contact.contact_phones.some((phone) => phone.phone_number === normalizePhoneNumber(contactPhone))) : null;
-  const sectionTitle = activeTab === "statistics" ? "Statistiques" : activeTab === "center" ? "IVR & files d’attente" : activeTab === "admin" ? "Administration" : activeTab === "powerdialer" ? "Powerdialer" : activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
+  const sectionTitle = activeTab === "followups" ? "Tickets & deals" : activeTab === "statistics" ? "Statistiques" : activeTab === "center" ? "IVR & files d’attente" : activeTab === "admin" ? "Administration" : activeTab === "powerdialer" ? "Powerdialer" : activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
   const lineOptions = lines.filter((item) => item.lines);
 
   return <div className="app-shell">
@@ -1141,6 +1148,7 @@ export default function App() {
       <nav className="main-nav" aria-label="Navigation principale">
         <button className={`nav-item${activeTab === "conversations" ? " selected" : ""}`} aria-current={activeTab === "conversations" ? "page" : undefined} onClick={() => setActiveTab("conversations")}><ChatCircle size={20} /><span>Conversations</span>{unreadCount > 0 && <span className="nav-count">{unreadCount}</span>}</button>
         <button className={`nav-item${activeTab === "contacts" ? " selected" : ""}`} aria-current={activeTab === "contacts" ? "page" : undefined} onClick={() => setActiveTab("contacts")}><Users size={20} /><span>Contacts</span></button>
+        <button className={`nav-item${activeTab === "followups" ? " selected" : ""}`} aria-current={activeTab === "followups" ? "page" : undefined} onClick={() => setActiveTab("followups")}><Plus size={20} /><span>Tickets & deals</span></button>
         <button className={`nav-item${activeTab === "powerdialer" ? " selected" : ""}`} aria-current={activeTab === "powerdialer" ? "page" : undefined} onClick={() => setActiveTab("powerdialer")}><Lightning size={20} /><span>Powerdialer</span></button>
         {canPurchaseNumber && <button className={`nav-item${activeTab === "center" ? " selected" : ""}`} aria-current={activeTab === "center" ? "page" : undefined} onClick={() => setActiveTab("center")}><Headset size={20}/><span>IVR & files d’attente</span></button>}
         {canPurchaseNumber && <button className={`nav-item statistics-nav-item${activeTab === "statistics" ? " selected" : ""}`} aria-current={activeTab === "statistics" ? "page" : undefined} onClick={() => setActiveTab("statistics")}><ChartBar size={20}/><span>Statistiques</span></button>}
@@ -1171,9 +1179,9 @@ export default function App() {
         voiceStatus={voiceStatus} voiceState={voiceState} muted={muted} calls={calls}
         loadContacts={(query, cursor) => api(`/v1/organizations/${selectedOrg}/contacts?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`)}
         onStart={(number, shouldContinue) => startVoiceCall(number, shouldContinue, true)} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigits={(digits) => voiceClient.current?.sendDigits(digits)}
-        subscribe={subscribePowerDialer} onLock={setPowerDialerLocked}
+        subscribe={subscribePowerDialer} onLock={setPowerDialerLocked} api={api} onContactSaved={() => { void directory.refresh(); }}
       />
-      {activeTab === "statistics" ? (canPurchaseNumber && selectedOrg ? <Statistics key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} refreshKey={adminRefresh}/> : <EmptyState icon={<ChartBar/>} title="Accès administrateur requis"/>) : activeTab === "powerdialer" ? null : activeTab === "conversations" ? <Conversations
+      {activeTab === "followups" ? (selectedOrg ? <CallFollowups key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} onCall={callId => setTranscriptTarget({ callId })} /> : <EmptyState icon={<Plus size={26} />} title="Aucun espace sélectionné" />) : activeTab === "statistics" ? (canPurchaseNumber && selectedOrg ? <Statistics key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} refreshKey={adminRefresh}/> : <EmptyState icon={<ChartBar/>} title="Accès administrateur requis"/>) : activeTab === "powerdialer" ? null : activeTab === "conversations" ? <Conversations
         inbox={inbox} contacts={contacts} number={messageDestination} lineNumber={activeLine?.phone_number ?? ""}
         messages={conversationMessages} body={messageBody} dataState={workspaceState} messagesState={messagesState}
         busy={busy || !networkOnline || smsRecoveryState !== "ready"} locked={conversationLocked} pending={Boolean(pendingSmsAttempt)}
@@ -1199,7 +1207,7 @@ export default function App() {
     {(voiceState !== "idle" || incomingFrom) && !dialerOpen && !(powerDialerLocked && activeTab === "powerdialer") && <button className="active-call-bar" onClick={() => powerDialerLocked ? setActiveTab("powerdialer") : setDialerOpen(true)}><Phone size={19} /><span>{incomingFrom ? "Appel entrant" : voiceStatus}</span><ArrowRight size={17} /></button>}
     {newConversationOpen && <NewConversation scope={`${session.user.id}:${selectedOrg}`} loadContacts={(query, cursor, signal) => apiClient.getPage<Contact>(`/v1/organizations/${selectedOrg}/contacts`, { limit: 50, cursor, query: { q: query || undefined }, signal })} onClose={() => setNewConversationOpen(false)} onOpen={(number) => openConversation(number)} />}
     {transcriptTarget && <Modal title="Tags & transcription de l’appel" className="transcript-modal" onClose={() => setTranscriptTarget(null)}><CallTranscript key={`${session.user.id}:${selectedOrg}:${transcriptTarget.callId ?? transcriptTarget.providerCallSid}`} api={api} loadAudio={loadCallAudio} playbackBlocked={voiceState !== "idle"} target={transcriptTarget} /></Modal>}
-    {dialerOpen && <CallDialog transcript={voiceState === "active" && providerCallSid ? <CallTranscript key={providerCallSid} api={api} loadAudio={loadCallAudio} playbackBlocked target={{ providerCallSid }} remoteName={destinationContact?.display_name ?? "Interlocuteur"} /> : null} number={destination} name={destinationContact?.display_name ?? null} line={activeLine?.phone_number ?? "non attribuée"} status={voiceStatus} state={voiceState} incoming={incomingFrom} muted={muted} enabled={canCall} busy={busy} onNumber={setDestination} onClose={() => setDialerOpen(false)} onCall={() => void startVoiceCall().catch((error: unknown) => setNotice(error instanceof Error ? error.message : "Appel impossible."))} onAccept={() => voiceClient.current?.acceptCall()} onReject={() => voiceClient.current?.rejectCall()} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigit={(digit) => voiceClient.current?.sendDigits(digit)} />}
+    {dialerOpen && <CallDialog ended={callEnded} actions={callContext && selectedOrg ? <CallCreateActions key={`${selectedOrg}:${callContext.key}`} organizationId={selectedOrg} context={callContext} api={api} disabled={!networkOnline} onContactSaved={() => { void directory.refresh(); }} /> : null} transcript={(voiceState === "active" || callEnded) && providerCallSid ? <CallTranscript key={providerCallSid} api={api} loadAudio={loadCallAudio} playbackBlocked={voiceState !== "idle"} target={{ providerCallSid }} remoteName={destinationContact?.display_name ?? "Interlocuteur"} /> : null} number={destination} name={destinationContact?.display_name ?? null} line={activeLine?.phone_number ?? "non attribuée"} status={voiceStatus} state={voiceState} incoming={incomingFrom} muted={muted} enabled={canCall} busy={busy} onNumber={setDestination} onClose={() => setDialerOpen(false)} onCall={() => void startVoiceCall().catch((error: unknown) => setNotice(error instanceof Error ? error.message : "Appel impossible."))} onAccept={() => voiceClient.current?.acceptCall()} onReject={() => voiceClient.current?.rejectCall()} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigit={(digit) => voiceClient.current?.sendDigits(digit)} />}
     {contactEditorOpen && <Modal title={editingContact ? "Modifier le contact" : "Ajouter un contact"} onClose={() => setContactEditorOpen(false)} busy={busy}><form className="contact-form" onSubmit={createContact}><label className="field-label">Nom du contact<input autoFocus value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Prénom Nom" required maxLength={120} /></label><label className="field-label">Téléphone<input inputMode="tel" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} placeholder="+33 6 12 34 56 78" /></label>{duplicateContact && <p className="inline-warning" role="status">Ce numéro est déjà associé à {duplicateContact.display_name}.</p>}{editingContact && editingContact.contact_phones.length > 1 && <p className="form-note">Autres numéros conservés : {editingContact.contact_phones.slice(1).map(phone => formatPhone(phone.phone_number)).join(", ")}</p>}<label className="field-label">Email <span className="optional-label">(facultatif)</span><input type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="nom@entreprise.com" /></label>{contactFormError && <p className="form-error" role="alert">{contactFormError}</p>}<div className="modal-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={() => setContactEditorOpen(false)}>Annuler</button><button className="button button-primary" disabled={busy}>{busy ? "Enregistrement…" : "Enregistrer"}</button></div></form></Modal>}
     {numberPurchaseOpen && selectedOrg && <NumberPurchase key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} email={session.user.email ?? "votre compte"} api={api} onClose={() => setNumberPurchaseOpen(false)} onPurchased={async (lineId) => { await refreshWorkspace(selectedOrg); setSelectedLineId(lineId); setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); if (activeTab === "admin") { setAdminRefresh((value) => value + 1); } else { setActiveTab("conversations"); setDialerOpen(true); } setNumberPurchaseOpen(false); setNotice("Votre nouvelle ligne est prête."); }} />}
   </div>;

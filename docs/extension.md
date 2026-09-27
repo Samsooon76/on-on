@@ -17,4 +17,6 @@ Le manifeste MV3 ne demande que `activeTab`, `scripting` et `storage`. Le script
 
 Pour produire les fichiers à charger : `pnpm --filter @onoff/extension build`. Pour générer une archive Chrome : `pnpm --filter @onoff/extension zip`.
 
+Dans le composeur web, le bouton **+ Créer** permet de créer un ticket, un deal ou un contact pendant l’appel et sur l’écran de fin d’appel. Voir [Créer depuis un appel](call-followups.md).
+
 Les tests unitaires et le build valident la normalisation et les URLs. L'installation réelle dans Chrome, les pages à injection restreinte, la connexion après expiration et le clic d'appel réel restent à vérifier sur un navigateur configuré avec une URL d'API accessible.

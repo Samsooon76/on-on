@@ -129,6 +129,28 @@ export function registerCallCenter(app: FastifyInstance, service: SupabaseClient
       return {version};
     });
   });
+  app.patch<{ Params:Params }>(`${root}/flows/:id/activation`,async(request,reply) => {
+    const auth=await scope(request,reply);if(!auth)return;
+    const input=z.object({enabled:z.boolean(),version:z.number().int().min(1)}).strict().parse(request.body);
+    if(input.enabled)requireProvider();
+    return locked(auth.orgId,auth.actorId,async()=>{
+      const line=checked(await db.from("lines").select("twilio_phone_number_sid,twilio_account_sid").eq("organization_id",auth.orgId).eq("id",request.params.id!).eq("status","active").eq("voice_enabled",true).maybeSingle());
+      if(!line)problem("Numéro vocal introuvable.",404);
+      const current=checked(await db.from("voice_flows").select("published,version").eq("organization_id",auth.orgId).eq("line_id",request.params.id!).maybeSingle());
+      if(!current?.published)problem("Publiez d’abord ce menu pour pouvoir l’activer.",409);
+      if(current.version!==input.version)problem("Le menu a changé. Actualisez avant de réessayer.",409);
+      if(current.published.enabled===input.enabled)return {version:current.version,enabled:input.enabled};
+      if(input.enabled){
+        if(line.twilio_account_sid!==config.TWILIO_ACCOUNT_SID || !line.twilio_phone_number_sid)problem("Ce numéro n’est pas relié au compte Twilio configuré.",409);
+        const number=await provider!.incomingPhoneNumbers(line.twilio_phone_number_sid).fetch();
+        if(number.voiceUrl!==`${base}/webhooks/twilio/voice/inbound` || number.voiceMethod!=="POST")problem("Le numéro doit être connecté à l’API entrante avant d’activer le menu.",409);
+      }
+      const updated=checked(await db.from("voice_flows").update({published:{...current.published,enabled:input.enabled},version:current.version+1}).eq("organization_id",auth.orgId).eq("line_id",request.params.id!).eq("version",input.version).select("version").maybeSingle());
+      if(!updated)problem("Le menu a changé. Actualisez avant de réessayer.",409);
+      await audit(auth.orgId,auth.actorId,input.enabled?"voice_flow.activate":"voice_flow.deactivate",request.params.id!);
+      return {version:updated.version,enabled:input.enabled};
+    });
+  });
   app.post<{ Params:Params }>(`${root}/lines/:id/connect`,async(request,reply)=>{
     const auth=await scope(request,reply);if(!auth)return;
     const remote=requireProvider();

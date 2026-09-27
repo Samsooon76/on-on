@@ -13,6 +13,7 @@ import { createVoiceAccessToken } from "./voice.js";
 import { createNumberProvider, registerNumberRoutes, type NumberProvider } from "./number-provisioning.js";
 import { registerAdminRoutes } from "./admin.js";
 import { registerStatisticsRoutes } from "./statistics.js";
+import { registerCallFollowups } from "./call-followups.js";
 import { serviceStatus } from "./services.js";
 import { isDelegatedToken, registerMcp } from "./mcp.js";
 import { deliverPreparedSms, type SmsProvider } from "./sms-delivery.js";
@@ -283,6 +284,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     return serviceStatus(config);
   });
   registerStatisticsRoutes(app, serviceSupabase);
+  registerCallFollowups(app, serviceSupabase);
   registerTags(app, config, serviceSupabase, dependencies.tagClassifier);
   registerMcp(app, config, serviceSupabase, makeSupabaseClient, makeSmsProvider);
   const callCenter = registerCallCenter(app, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), config, validateTwilioWebhook);

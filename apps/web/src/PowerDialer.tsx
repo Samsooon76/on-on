@@ -6,6 +6,7 @@ import { callLabel, formatPhone, phoneKey, type CallRecord, type Contact } from 
 import { dialerContacts, dialerReducer, initialDialerState, isDialing, outcomes, withinCallingHours, type DialerContact, type Outcome } from "./powerdialer-model";
 import { CsvImport, DialerSettingsDialog, CallbackDialog, dialerReportCsv, downloadDialerFile, entryStatus, formatScheduledDate } from "./PowerDialerDialogs";
 import { useDialerPersistence } from "./useDialerPersistence";
+import { CallCreateActions, type CallActionApi } from "./CallCreateActions";
 import "./powerdialer.css";
 
 type ContactPage = { items: Contact[]; nextCursor: string | null };
@@ -26,6 +27,8 @@ type Props = {
   onDigits(digits: string): void;
   subscribe(listener: (event: VoiceEvent) => void): () => void;
   onLock(locked: boolean): void;
+  api: CallActionApi;
+  onContactSaved(): void;
 };
 
 export function PowerDialer(props: Props) {
@@ -39,8 +42,9 @@ export function PowerDialer(props: Props) {
 
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [creationOpen, setCreationOpen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const modalOpen = pickerOpen || csvOpen || settingsOpen || summaryOpen || callbackTarget !== null;
+  const modalOpen = pickerOpen || csvOpen || settingsOpen || summaryOpen || callbackTarget !== null || creationOpen;
   const [now, setNow] = useState(() => new Date().toISOString());
   const inHours = withinCallingHours(state.settings, now);
   const scheduled = state.entries.filter((item) => item.status === "scheduled");
@@ -229,7 +233,8 @@ export function PowerDialer(props: Props) {
             {entry.attempts.length > 0 && <details className="pd-attempt-history"><summary>{entry.attempts.length} tentative(s) · historique</summary>{entry.attempts.map((attempt, index) => <p key={index}>{index + 1}. {formatScheduledDate(attempt.attemptedAt)} · {outcomes.find((outcome) => outcome.id === attempt.outcome)?.label ?? "À qualifier"}{attempt.notes ? ` — ${attempt.notes}` : ""}</p>)}</details>}
             {state.settings.script && <details className="pd-script"><summary>Script d’appel</summary><p>{state.settings.script}</p></details>}
             <label className="pd-notes">Notes de l’appel<span>Facultatif · conservées dans cette session</span><textarea value={entry.notes} maxLength={5000} placeholder="Besoins, objections, prochaine étape…" onFocus={() => { if (state.phase === "between") dispatch({ type: "pause" }); }} onChange={(event) => dispatch({ type: "notes", id: entry.id, notes: event.target.value })} /></label>
-            <section className="pd-qualification" aria-label="Résultat de l’appel"><div><h4><Tag size={16} />Résultat de l’appel</h4><span>{state.phase === "calling" ? "Un clic raccroche et passe au suivant" : "Un clic pour qualifier et continuer"}</span></div><div className="pd-outcomes">{outcomes.map((outcome) => <button key={outcome.id} disabled={!["calling", "wrapup"].includes(state.phase)} onClick={() => qualify(outcome.id)} aria-keyshortcuts={outcome.key}><span>{outcome.label}</span><kbd>{outcome.key}</kbd></button>)}</div>{entry.outcome && <p className="pd-result-saved"><Check size={14} />{outcomes.find((outcome) => outcome.id === entry.outcome)?.label} · résultat retenu</p>}</section>
+            {entry.intentId && ["calling", "ending", "wrapup"].includes(state.phase) && <CallCreateActions key={`${entry.id}:${entry.intentId}`} organizationId={props.scope.organizationId} context={{ key: entry.intentId, number: entry.number, intentId: entry.intentId }} api={props.api} initialNotes={entry.notes} disabled={!persistence.ownsSession} onContactSaved={props.onContactSaved} onEditingChange={setCreationOpen} />}
+            <section className="pd-qualification" aria-label="Résultat de l’appel"><div><h4><Tag size={16} />Résultat de l’appel</h4><span>{state.phase === "calling" ? "Un clic raccroche et passe au suivant" : "Un clic pour qualifier et continuer"}</span></div><div className="pd-outcomes">{outcomes.map((outcome) => <button key={outcome.id} disabled={creationOpen || !["calling", "wrapup"].includes(state.phase)} onClick={() => qualify(outcome.id)} aria-keyshortcuts={outcome.key}><span>{outcome.label}</span><kbd>{outcome.key}</kbd></button>)}</div>{entry.outcome && <p className="pd-result-saved"><Check size={14} />{outcomes.find((outcome) => outcome.id === entry.outcome)?.label} · résultat retenu</p>}</section>
           </> : state.phase === "waiting" ? <div className="pd-complete"><Clock size={42} weight="light" /><h3>Vos rappels sont planifiés.</h3><p>{scheduled.length} contact(s) en attente{nextScheduled ? ` · prochain à partir du ${formatScheduledDate(nextScheduled)}` : ""}.</p><p>Gardez cette campagne ouverte. À l’échéance, cliquez sur « Appeler le suivant » pour reprendre.</p><button className="button button-secondary" onClick={() => setSummaryOpen(true)}>Gérer les rappels</button><button className="text-button" onClick={openCsv}>Importer d’autres contacts</button></div> : <div className="pd-complete"><CheckCircle size={45} weight="light" /><h3>Votre file est terminée.</h3><p>{completed.length} appel{completed.length > 1 ? "s" : ""} qualifié{completed.length > 1 ? "s" : ""}{skipped ? ` · ${skipped} contact${skipped > 1 ? "s" : ""} ignoré${skipped > 1 ? "s" : ""}` : ""}</p><div className="pd-summary-counts">{outcomes.map((outcome) => <div key={outcome.id}><strong>{completed.filter((item) => item.outcome === outcome.id).length}</strong><span>{outcome.label}</span></div>)}</div><button className="button button-primary" onClick={() => exportSession()}><DownloadSimple size={17} />Exporter le bilan et les notes</button><button className="text-button" onClick={() => setPickerOpen(true)}><Plus size={15} />Ajouter d’autres contacts</button></div>}
         </div>
       </div>

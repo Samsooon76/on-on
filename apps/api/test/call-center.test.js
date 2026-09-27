@@ -12,13 +12,14 @@ const queue={id:queueId,organization_id:org,line_id:line,version:1,synced_versio
 const session={callId:call,orgId:org,lineId:line,callSid:sid('CA'),from:'+33601020304',to:'+33102030405',flow:defaultVoiceFlow(),epoch:0};
 function store(options={}){
  const state={role:'admin',epoch:0,ended:false,reserve:'client:agent',queries:[],rpcCalls:[],...options};
- const rows=()=>({memberships:[{role:state.role,user_id:user,organization_id:org,status:'active'}],organizations:[{id:org,status:'active'}],voice_workspaces:[{organization_id:org,workspace_sid:sid('WS'),activities:{offline:sid('WA'),available:'WA'+'2'.repeat(32)}}],voice_queues:[queue],voice_agents:[{organization_id:org,user_id:user,worker_sid:sid('WK'),contact_number:null}],lines:[{id:line,organization_id:org,status:'active',twilio_account_sid:config.TWILIO_ACCOUNT_SID,phone_number:session.to}],calls:[{id:call,line_id:line,organization_id:org,remote_number:session.from,ended_at:state.ended?'2026-01-01T00:00:00Z':null,ivr_state:{engine:'taskrouter',config:session.flow,epoch:state.epoch}}],call_legs:[{provider_call_sid:sid('CA'),call_id:call,organization_id:org}],voice_flows:[],voice_voicemails:[],devices:[],line_assignments:[]} );
+ const rows=()=>({memberships:[{role:state.role,user_id:user,organization_id:org,status:'active'}],organizations:[{id:org,status:'active'}],voice_workspaces:[{organization_id:org,workspace_sid:sid('WS'),activities:{offline:sid('WA'),available:'WA'+'2'.repeat(32)}}],voice_queues:[queue],voice_agents:[{organization_id:org,user_id:user,worker_sid:sid('WK'),contact_number:null}],lines:[{id:line,organization_id:org,status:'active',voice_enabled:true,twilio_account_sid:config.TWILIO_ACCOUNT_SID,twilio_phone_number_sid:sid('PN'),phone_number:session.to}],calls:[{id:call,line_id:line,organization_id:org,remote_number:session.from,ended_at:state.ended?'2026-01-01T00:00:00Z':null,ivr_state:{engine:'taskrouter',config:session.flow,epoch:state.epoch}}],call_legs:[{provider_call_sid:sid('CA'),call_id:call,organization_id:org}],voice_flows:state.flows??[],voice_voicemails:[],devices:[],line_assignments:[]} );
  const client={auth:{getUser:async()=>({data:{user:{id:user}},error:null})},from(table){
   const operations=[];let one=false,mutation=false;
-  const q={select(){return q},eq(k,v){operations.push([k,v]);return q},not(){return q},is(){return q},in(){return q},order(){return q},limit(){return q},update(values){mutation=true;state.queries.push({table,values,operations});return q},insert(values){mutation=true;state.queries.push({table,values,operations});return q},upsert(values){mutation=true;state.queries.push({table,values,operations});return q},single(){one=true;return q},maybeSingle(){one=true;return q},then(resolve,reject){const data=(rows()[table]??[]).filter(row=>operations.every(([k,v])=>row[k]===v));return Promise.resolve({data:mutation?null:one?data[0]??null:data,error:null}).then(resolve,reject)}};return q;
+  let updatedValues=null;
+  const q={select(){return q},eq(k,v){operations.push([k,v]);return q},not(){return q},is(){return q},in(){return q},order(){return q},limit(){return q},update(values){mutation=true;updatedValues=values;state.queries.push({table,values,operations});return q},insert(values){mutation=true;state.queries.push({table,values,operations});return q},upsert(values){mutation=true;state.queries.push({table,values,operations});return q},single(){one=true;return q},maybeSingle(){one=true;return q},then(resolve,reject){const data=(rows()[table]??[]).filter(row=>operations.every(([k,v])=>row[k]===v));if(table==='voice_flows'&&updatedValues&&data.length)Object.assign(data[0],updatedValues);return Promise.resolve({data:mutation&&table!=='voice_flows'?null:one?data[0]??null:data,error:null}).then(resolve,reject)}};return q;
  },rpc:async(name,args)=>{state.rpcCalls.push({name,args});return {data:name==='voice_reserve_agent'?state.reserve:name==='admin_snapshot'?{members:[],lines:[],assignments:[],audit:[]}:true,error:null}}};return {client,state};
 }
-function setup(t,options={}){const {client,state}=store(options);const app=createApp(config,{createSupabaseClient:()=>client,centerProvider:{}});t.after(()=>app.close());return {app,state};}
+function setup(t,options={}){const {client,state}=store(options);const app=createApp(config,{createSupabaseClient:()=>client,centerProvider:options.provider??{}});t.after(()=>app.close());return {app,state};}
 function signed(app,path,body,valid=true){return app.inject({method:'POST',url:path,headers:{'content-type':'application/x-www-form-urlencoded','x-twilio-signature':valid?twilio.getExpectedTwilioSignature(config.TWILIO_AUTH_TOKEN,config.API_PUBLIC_URL+path,body):'invalid'},payload:new URLSearchParams(body).toString()});}
 const body={AccountSid:config.TWILIO_ACCOUNT_SID,CallSid:sid('CA'),From:session.from,To:session.to};
 test('business hours honor Paris timezone, DST, overnight shifts and weekday boundary',()=>{
@@ -54,12 +55,34 @@ test('center routes deny unauthenticated, member and cross-tenant access before 
  assert.equal((await app.inject({url:base})).statusCode,401);
  state.role='member';assert.equal((await app.inject({url:base,headers:{authorization:'Bearer session'}})).statusCode,403);
  assert.equal((await app.inject({method:'POST',url:base+'/setup',headers:{authorization:'Bearer session'}})).statusCode,403);
+ assert.equal((await app.inject({method:'PATCH',url:`${base}/flows/${line}/activation`,headers:{authorization:'Bearer session'},payload:{enabled:false,version:1}})).statusCode,403);
  state.role='admin';assert.equal((await app.inject({url:'/v1/organizations/10000000-0000-4000-8000-000000000002/center',headers:{authorization:'Bearer session'}})).statusCode,403);
  assert.equal(state.queries.length,0);
 });
 test('invalid configuration yields 400 before any configuration write',async t=>{
  const {app,state}=setup(t);const response=await app.inject({method:'PUT',url:`/v1/organizations/${org}/center/flows/${line}`,headers:{authorization:'Bearer session'},payload:{config:{},version:0,publish:true}});
  assert.equal(response.statusCode,400);assert.equal(state.queries.length,0);
+});
+test('IVR activation keeps the draft intact and rejects stale or unpublished changes',async t=>{
+ const draft={...defaultVoiceFlow(),greeting:'Brouillon non publié'};
+ const published={...defaultVoiceFlow(),greeting:'Message en service'};
+ const flow={organization_id:org,line_id:line,draft,published,version:3,published_at:'2026-09-26T12:00:00Z'};
+ const {app,state}=setup(t,{flows:[flow],provider:{incomingPhoneNumbers:()=>({fetch:async()=>({voiceUrl:'https://api.example.com/webhooks/twilio/voice/inbound',voiceMethod:'POST'})})}});
+ const url=`/v1/organizations/${org}/center/flows/${line}/activation`;
+ const send=(enabled,version)=>app.inject({method:'PATCH',url,headers:{authorization:'Bearer session'},payload:{enabled,version}});
+ assert.equal((await send(false,2)).statusCode,409);
+ assert.equal((await send(false,3)).statusCode,200);
+ assert.equal(flow.published.enabled,false);
+ assert.equal(flow.draft.greeting,'Brouillon non publié');
+ assert.equal(flow.published.greeting,'Message en service');
+ assert.equal(flow.version,4);
+ assert.equal((await send(true,4)).statusCode,200);
+ assert.equal(flow.published.enabled,true);
+ assert.equal(flow.version,5);
+ assert.equal((await send(true,5)).statusCode,200);
+ assert.equal(flow.version,5);
+ flow.published=null;
+ assert.equal((await send(true,5)).statusCode,409);
 });
 test('signed menu handles invalid/no input retries, fallbacks and spoofed webhook rejection',async t=>{
  const {app}=setup(t);const path='/webhooks/twilio/center/menu?epoch=0&menu=accueil&attempt=1&depth=1';

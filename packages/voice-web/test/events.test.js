@@ -9,6 +9,15 @@ function sdkCall(status = "connecting") {
   call.disconnect = () => { call.disconnected = true; call.emit("disconnect"); };
   return call;
 }
+function incomingCall(callId, sid) {
+  const call = new EventEmitter();
+  let status = "pending";
+  call.status = () => status;
+  call.parameters = { CallSid: sid, From: "+33100000002" };
+  call.customParameters = new Map([["CallId", callId]]);
+  call.reject = () => { status = "closed"; call.rejected = true; call.emit("reject"); };
+  return call;
+}
 function setup(connect) {
   const client = new TwilioWebVoiceClient(), events = [];
   // SDK boundary only; production always constructs the real Twilio Device.
@@ -57,4 +66,53 @@ test("connected events include the provider SID when the SDK supplies it", async
     }
     assert.deepEqual(events.at(-1), { type: "active", providerCallSid: sid });
   }
+});
+
+test("rejecting an inbound call dismisses queued and late invites for the same call", () => {
+  const first = incomingCall("business-call-1", "CA1");
+  const queued = incomingCall("business-call-1", "CA2");
+  const queuedAgain = incomingCall("business-call-1", "CA3");
+  const late = incomingCall("business-call-1", "CA4");
+  const fresh = incomingCall("business-call-2", "CA5");
+  const { client, events } = setup(async () => first);
+  client.device.calls = [first, queued, queuedAgain];
+  for (const call of client.device.calls) {
+    const reject = call.reject;
+    call.reject = () => {
+      reject();
+      client.device.calls.splice(client.device.calls.indexOf(call), 1);
+    };
+  }
+
+  client.handleIncoming(first);
+  client.rejectCall();
+  client.handleIncoming(late);
+  client.handleIncoming(fresh);
+
+  assert.equal(first.rejected, true);
+  assert.equal(queued.rejected, true);
+  assert.equal(queuedAgain.rejected, true);
+  assert.equal(late.rejected, true);
+  assert.equal(fresh.rejected, undefined);
+  assert.deepEqual(events.map(event => event.type), ["incoming", "ended", "incoming"]);
+});
+
+test("a cancelled invite emitted late by the SDK is never shown again", () => {
+  const call = incomingCall("business-call-1", "CA1");
+  const { client, events } = setup(async () => call);
+  call.reject();
+  client.handleIncoming(call);
+  assert.deepEqual(events, []);
+});
+
+test("a second incoming call cannot replace the one displayed", () => {
+  const visible = incomingCall("business-call-1", "CA1");
+  const hidden = incomingCall("business-call-2", "CA2");
+  const { client, events } = setup(async () => visible);
+  client.handleIncoming(visible);
+  client.handleIncoming(visible);
+  client.handleIncoming(hidden);
+  assert.equal(hidden.rejected, true);
+  assert.equal(visible.rejected, undefined);
+  assert.deepEqual(events.map(event => event.type), ["incoming"]);
 });

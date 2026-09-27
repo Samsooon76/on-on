@@ -8,6 +8,7 @@ export class TwilioWebVoiceClient implements VoiceClient {
   private activeCall: Call | null = null;
   private refreshToken: (() => Promise<string>) | null = null;
   private connectVersion = 0;
+  private readonly dismissedIncoming = new Map<string, number>();
   private readonly listeners = new Set<(event: VoiceEvent) => void>();
 
   async register(token: string, refreshToken: () => Promise<string>): Promise<void> {
@@ -18,10 +19,7 @@ export class TwilioWebVoiceClient implements VoiceClient {
     this.device = device;
     device.on("registered", () => this.emit({ type: "ready" }));
     device.on("unregistered", () => this.emit({ type: "unavailable", message: "La ligne n’est plus enregistrée." }));
-    device.on("incoming", (call) => {
-      this.bindCall(call, true);
-      this.emit({ type: "incoming", from: call.parameters.From ?? "Numéro masqué" });
-    });
+    device.on("incoming", (call) => this.handleIncoming(call));
     device.on("tokenWillExpire", () => {
       void this.refreshToken?.().then((nextToken) => device.updateToken(nextToken)).catch(() => {
         this.emit({ type: "unavailable", message: "La session vocale a expiré. Réactivez la ligne." });
@@ -50,7 +48,18 @@ export class TwilioWebVoiceClient implements VoiceClient {
   }
 
   rejectCall(): void {
-    this.activeCall?.reject();
+    const call = this.activeCall;
+    if (!call || call.status() !== "pending") return;
+    const key = this.incomingKey(call);
+    if (key) this.dismissedIncoming.set(key, Date.now());
+    call.reject();
+    // Twilio can deliver another invite for the same call before its rejection
+    // has propagated. Reject any already queued on this Device as well.
+    if (key) {
+      for (const pending of [...(this.device?.calls ?? [])]) {
+        if (pending !== call && this.incomingKey(pending) === key && pending.status() === "pending") pending.reject();
+      }
+    }
   }
 
   hangUp(): void {
@@ -78,10 +87,33 @@ export class TwilioWebVoiceClient implements VoiceClient {
     this.device = null;
     this.activeCall = null;
     this.refreshToken = null;
+    this.dismissedIncoming.clear();
     if (device) {
       device.removeAllListeners();
       await device.destroy();
     }
+  }
+
+  private incomingKey(call: Call): string {
+    return call.customParameters?.get("CallId") || call.parameters?.CallSid || "";
+  }
+
+  private handleIncoming(call: Call): void {
+    const now = Date.now();
+    for (const [key, dismissedAt] of this.dismissedIncoming) {
+      if (now - dismissedAt > 120_000) this.dismissedIncoming.delete(key);
+    }
+    // The SDK emits "incoming" only after starting its ringtone. An invite can
+    // have been rejected or cancelled during that asynchronous startup.
+    if (call.status() !== "pending") return;
+    if (this.activeCall === call) return;
+    const key = this.incomingKey(call);
+    if ((key && this.dismissedIncoming.has(key)) || this.activeCall) {
+      call.reject();
+      return;
+    }
+    this.bindCall(call, true);
+    this.emit({ type: "incoming", from: call.parameters.From ?? "Numéro masqué" });
   }
 
   private bindCall(call: Call, incoming: boolean): void {

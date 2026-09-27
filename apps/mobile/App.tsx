@@ -34,6 +34,7 @@ import {
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const apiBase = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
+const iosPersonalTeamPreview = Platform.OS === "ios" && process.env.EXPO_PUBLIC_IOS_LOCAL_NO_PUSH === "1";
 const secureStorage = {
   getItem: (key: string) => SecureStore.getItemAsync(key),
   setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
@@ -343,7 +344,7 @@ function MobileApp() {
   }, []);
 
   useEffect(() => {
-    const voice = createNativeVoiceClient(Platform.OS === "ios" ? "ios" : "android");
+    const voice = createNativeVoiceClient(Platform.OS === "ios" ? "ios" : "android", !iosPersonalTeamPreview);
     voiceRef.current = voice;
     const unsubscribe = voice.subscribe((event) => {
       switch (event.type) {
@@ -574,8 +575,8 @@ function MobileApp() {
       });
       if (cancelled) return;
       voiceTokenRef.current = token.token;
-      setCanReceiveNativeCalls(token.incomingEnabled);
-      if (token.incomingEnabled && !voiceRegistrationRef.current) {
+      setCanReceiveNativeCalls(token.incomingEnabled && !iosPersonalTeamPreview);
+      if (token.incomingEnabled && !iosPersonalTeamPreview && !voiceRegistrationRef.current) {
         const registrationStartedAt = Date.now();
         try {
           await voiceRef.current?.register(token.token, async () => token.token);
@@ -588,7 +589,9 @@ function MobileApp() {
         await markVoiceState(false);
         await voiceRef.current?.unregister(token.token).catch(() => undefined);
       }
-      setVoiceStatus(token.incomingEnabled ? "Appareil prêt pour les appels" : "Appels sortants prêts; le push entrant reste à configurer");
+      setVoiceStatus(iosPersonalTeamPreview
+        ? "Appels sortants prêts ; appels entrants indisponibles avec ce compte Apple"
+        : token.incomingEnabled ? "Appareil prêt pour les appels" : "Appels sortants prêts; le push entrant reste à configurer");
     })().catch((error: unknown) => {
       if (!cancelled) setVoiceStatus(friendlyError(error));
     });

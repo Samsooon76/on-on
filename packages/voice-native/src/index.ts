@@ -22,8 +22,8 @@ export class TwilioNativeVoiceClient implements NativeVoiceClient {
   private pendingInvite: CallInvite | null = null;
   private audioRouteListener: ((snapshot: NativeAudioRouteSnapshot) => void) | null = null;
 
-  constructor(private readonly platform: "ios" | "android") {
-    if (platform === "ios") {
+  constructor(private readonly platform: "ios" | "android", enablePushRegistry = true) {
+    if (platform === "ios" && enablePushRegistry) {
       void this.voice.initializePushRegistry().catch((error: unknown) => {
         this.emit({ type: "unavailable", message: getMessage(error) });
       });
@@ -182,8 +182,8 @@ export class TwilioNativeVoiceClient implements NativeVoiceClient {
   }
 }
 
-export function createNativeVoiceClient(platform: "ios" | "android"): NativeVoiceClient {
-  return new TwilioNativeVoiceClient(platform);
+export function createNativeVoiceClient(platform: "ios" | "android", enablePushRegistry = true): NativeVoiceClient {
+  return new TwilioNativeVoiceClient(platform, enablePushRegistry);
 }
 
 function toSnapshot(audioDevices: AudioDevice[], selectedDevice?: AudioDevice): NativeAudioRouteSnapshot {
