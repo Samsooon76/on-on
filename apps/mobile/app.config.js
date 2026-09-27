@@ -10,6 +10,7 @@ export default {
     platforms: ["ios", "android"],
     orientation: "portrait",
     userInterfaceStyle: "light",
+    primaryColor: "#28232D",
     plugins: [
       ["expo-build-properties", { ios: { enableSceneSupport: true } }],
       ["@twilio/voice-react-native-sdk", {

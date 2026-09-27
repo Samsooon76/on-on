@@ -17,7 +17,7 @@
 }
 .api-endpoint {
   padding: 22px 0;
-  border-bottom: 1px solid #e1e6df;
+  border-bottom: 1px solid var(--line);
 }
 .api-endpoint-title {
   display: flex;
@@ -28,11 +28,11 @@
   font-size: 11px;
   padding: 3px 8px;
   border-radius: 5px;
-  background: #f0f1ef;
-  color: #657065;
+  background: var(--surface);
+  color: var(--muted);
 }
 .api-badge.enabled {
-  background: #e9f3e9;
+  background: var(--surface);
   color: #276746;
 }
 .api-url {
@@ -40,14 +40,14 @@
     12px ui-monospace,
     monospace;
   overflow-wrap: anywhere;
-  color: #5a6c60;
+  color: var(--muted);
 }
 .api-secret,
 .api-notice,
 .api-confirm {
   padding: 16px;
-  background: #eff5ef;
-  border: 1px solid #dce6db;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.6;
@@ -118,7 +118,7 @@
 .api-deliveries small {
   display: block;
   font-size: 11px;
-  color: #6c7a6e;
+  color: var(--muted);
 }
 .api-create form > .button {
   justify-self: start;
@@ -134,7 +134,7 @@
 .api-deliveries td,
 .api-deliveries th {
   padding: 10px 8px;
-  border-bottom: 1px solid #e4e8e1;
+  border-bottom: 1px solid var(--line);
   text-align: left;
 }
 @media (max-width: 600px) {

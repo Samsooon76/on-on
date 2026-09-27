@@ -12,7 +12,6 @@ export function TagManager({ api, organizationId }: { api: TagApi; organizationI
   const [busy, setBusy] = useState(false), [revision, setRevision] = useState(0);
   const [draft, setDraft] = useState<TagInput | null>(null), [editing, setEditing] = useState<Tag | null>(null);
   const [remove, setRemove] = useState<Tag | null>(null), [threshold, setThreshold] = useState(85);
-  useEffect(() => { if (new URLSearchParams(window.location.search).get("settings") === "tags") document.getElementById("call-tags")?.scrollIntoView(); }, []);
   useEffect(() => {
     const controller = new AbortController();
     void client.catalog(organizationId, controller.signal).then(data => { setCatalog(data); setThreshold(Math.round(data.settings.confidenceThreshold * 100)); setError(""); }).catch(e => { if (!controller.signal.aborted) setError(message(e)); });

@@ -1,0 +1,37 @@
+/* Generated from index.ts by generate-css.ts. */
+@font-face {
+  font-family: 'Inter';
+  src: url('./assets/inter-variable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+:root {
+  --ink: #242424;
+  --muted: #6E6873;
+  --accent: #28232D;
+  --accent-dark: #17131C;
+  --accent-soft: #EEE7F2;
+  --canvas: #FFFFFF;
+  --surface: #F7F5F8;
+  --line: #E8E3EB;
+  --lavender: #F0E5F4;
+  --violet: #84549A;
+  --lime: #DDF3A0;
+  --success: #39742D;
+  --success-soft: #EDF6E8;
+  --danger: #AB4545;
+  --danger-soft: #FAF0F0;
+  --warning: #8B6329;
+  --warning-soft: #FFF5E5;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-dialog: 18px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --shadow-card: 0 2px 4px rgb(45 27 55 / 3%);
+  --shadow-overlay: 0 20px 65px rgb(45 27 55 / 14%);
+  --wash: radial-gradient(ellipse 600px 440px at 0 0, #e6c9e8 0%, #ead9f0 25%, #f5eff9 65%, transparent 100%);
+  --highlight: linear-gradient(110deg, #a2f2b3, #d5f0a0 60%, #f5f386);
+  --gradient-text: linear-gradient(105deg, #9460b6, #b667a5 48%, #b17630);
+  color-scheme: light;
+}

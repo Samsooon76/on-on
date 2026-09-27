@@ -52,7 +52,7 @@ export function Admin({ organizationId, userId, api, onPurchase, onChanged, refr
 
   return <section className="admin-page">
     <div className="admin-intro"><div><span className="admin-eyebrow"><ShieldCheck size={15} />Administration de l’espace</span><h2>Une équipe, les bons accès.</h2><p>Gérez les utilisateurs, les numéros et l’accueil de vos appels.</p></div><button className="button button-secondary" disabled={loading} onClick={() => void reload()}><ArrowClockwise size={16} />Actualiser</button></div>
-    <nav className="admin-tabs" aria-label="Rubriques d’administration">{([
+    <nav className="section-tabs" aria-label="Rubriques d’administration">{([
       ["members", "Utilisateurs", Users], ["lines", "Numéros & IVR", Phone], ["roles", "Rôles & permissions", ShieldCheck], ["audit", "Historique", ArrowClockwise],
     ] as const).map(([key, label, Icon]) => <button key={key} aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={17} />{label}{key === "members" && data && <span>{data.members.length}</span>}</button>)}</nav>
     {notice && <p className="admin-notice" role="status"><CheckCircle size={17} />{notice}</p>}

@@ -3,16 +3,16 @@ import { apiBase, supabase } from "./backend";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Admin } from "./Admin";
 import { Statistics } from "./Statistics";
-import { McpConsent, McpIntegrations } from "./McpIntegrations";
-import { ApiIntegrations } from "./ApiIntegrations";
+import { McpConsent } from "./McpIntegrations";
+import { Settings, type LineAssignment, type DeviceRecord } from "./Settings";
+import { settingsTabFromSearch } from "./settings-navigation";
 import { CallCenter, QueuePresence } from "./CallCenter";
 import { NumberPurchase } from "./NumberPurchase";
 import webPackage from "../package.json";
-import { TextAlignLeft, ArrowClockwise, ArrowRight, ChartBar, Headset, ShieldCheck, Lightning, ChatCircle, CheckCircle, GearSix, Microphone, Monitor, Phone, Plus, SignOut, DeviceMobile, Users, WarningCircle, X } from "@phosphor-icons/react";
+import { SidebarSimple, TextAlignLeft, ArrowClockwise, ArrowRight, ChartBar, Headset, ShieldCheck, Lightning, ChatCircle, GearSix, Phone, Plus, Users, WarningCircle, X } from "@phosphor-icons/react";
 import { Conversations } from "./Conversations";
 import { Contacts } from "./Contacts";
 import { PowerDialer } from "./PowerDialer";
-import { TagManager } from "./Tags";
 import { CallTranscript } from "./CallTranscript";
 import type { TranscriptTarget } from "@onoff/api-client";
 import { CallDialog, NewConversation } from "./ConversationDialogs";
@@ -28,8 +28,6 @@ import { createVoiceClient, type VoiceEvent } from "@onoff/voice-web";
 import type { VoiceClient } from "@onoff/voice-contract";
 
 type Organization = { organization_id: string; role: "admin" | "member"; organizations: { id: string; name: string } | null };
-type LineAssignment = { can_voice: boolean; can_sms: boolean; lines: { id: string; phone_number: string; voice_enabled: boolean; sms_enabled: boolean } | null };
-type DeviceRecord = { id: string; organization_id: string; platform: string; label: string; status: string; last_active_at: string | null; created_at: string };
 type VoiceDiagnosticEvent = "voice_registration_failed" | "history_refresh_succeeded" | "history_refresh_failed";
 
 function takeCallDraftFromUrl(): string {
@@ -42,6 +40,7 @@ function takeCallDraftFromUrl(): string {
 }
 
 export default function App() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(!supabase);
   const [email, setEmail] = useState("");
@@ -82,7 +81,7 @@ export default function App() {
   const historyScope = useRef("");
   const historyExpanded = useRef(false);
   const smsSubmitting = useRef(false);
-  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings" | "admin" | "center" | "statistics" | "followups">(() => (new URLSearchParams(window.location.search).has("mcpSms") || new URLSearchParams(window.location.search).get("settings") === "tags") ? "settings" : "conversations");
+  const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings" | "admin" | "center" | "statistics" | "followups">(() => settingsTabFromSearch(window.location.search) ? "settings" : "conversations");
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
@@ -1141,30 +1140,31 @@ export default function App() {
   const sectionTitle = activeTab === "followups" ? "Tickets & deals" : activeTab === "statistics" ? "Statistiques" : activeTab === "center" ? "IVR & files d’attente" : activeTab === "admin" ? "Administration" : activeTab === "powerdialer" ? "Powerdialer" : activeTab === "contacts" ? "Contacts" : activeTab === "settings" ? "Réglages" : "Conversations";
   const lineOptions = lines.filter((item) => item.lines);
 
-  return <div className="app-shell">
+  return <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <aside className="sidebar">
-      <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setActiveTab("conversations"); }} aria-label="Onoff, conversations"><span className="brand-mark">o</span><span>onoff</span></a>
+      <div className="sidebar-brand-row"><a className="brand" href="#" onClick={(event) => { event.preventDefault(); setActiveTab("conversations"); }} aria-label="Onoff, conversations"><span className="brand-mark">o</span><span>onoff</span></a><button className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? "Développer la navigation" : "Réduire la navigation"} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed(value => !value)}><SidebarSimple size={19}/></button></div>
       <div className="workspace-switch"><span className="workspace-initial">{organizationName.slice(0, 1)}</span>{organizations.length > 1 ? <select aria-label="Organisation active" value={selectedOrg} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked} onChange={(event) => selectOrganization(event.target.value)}>{organizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations?.name ?? "Mon espace"}</option>)}</select> : <span>{organizationName}</span>}</div>
+      <span className="nav-label">Espace de travail</span>
       <nav className="main-nav" aria-label="Navigation principale">
-        <button className={`nav-item${activeTab === "conversations" ? " selected" : ""}`} aria-current={activeTab === "conversations" ? "page" : undefined} onClick={() => setActiveTab("conversations")}><ChatCircle size={20} /><span>Conversations</span>{unreadCount > 0 && <span className="nav-count">{unreadCount}</span>}</button>
-        <button className={`nav-item${activeTab === "contacts" ? " selected" : ""}`} aria-current={activeTab === "contacts" ? "page" : undefined} onClick={() => setActiveTab("contacts")}><Users size={20} /><span>Contacts</span></button>
-        <button className={`nav-item${activeTab === "followups" ? " selected" : ""}`} aria-current={activeTab === "followups" ? "page" : undefined} onClick={() => setActiveTab("followups")}><Plus size={20} /><span>Tickets & deals</span></button>
-        <button className={`nav-item${activeTab === "powerdialer" ? " selected" : ""}`} aria-current={activeTab === "powerdialer" ? "page" : undefined} onClick={() => setActiveTab("powerdialer")}><Lightning size={20} /><span>Powerdialer</span></button>
-        {canPurchaseNumber && <button className={`nav-item${activeTab === "center" ? " selected" : ""}`} aria-current={activeTab === "center" ? "page" : undefined} onClick={() => setActiveTab("center")}><Headset size={20}/><span>IVR & files d’attente</span></button>}
-        {canPurchaseNumber && <button className={`nav-item statistics-nav-item${activeTab === "statistics" ? " selected" : ""}`} aria-current={activeTab === "statistics" ? "page" : undefined} onClick={() => setActiveTab("statistics")}><ChartBar size={20}/><span>Statistiques</span></button>}
-        {canPurchaseNumber && <button className={`nav-item admin-nav-item${activeTab === "admin" ? " selected" : ""}`} aria-current={activeTab === "admin" ? "page" : undefined} onClick={() => setActiveTab("admin")}><ShieldCheck size={20} /><span>Administration</span></button>}
-        <button className={`nav-item mobile-settings${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
+        <button className={`nav-item${activeTab === "conversations" ? " selected" : ""}`} aria-current={activeTab === "conversations" ? "page" : undefined} onClick={() => setActiveTab("conversations")} aria-label="Conversations" title="Conversations"><ChatCircle size={20} /><span>Conversations</span>{unreadCount > 0 && <span className="nav-count">{unreadCount}</span>}</button>
+        <button className={`nav-item${activeTab === "contacts" ? " selected" : ""}`} aria-current={activeTab === "contacts" ? "page" : undefined} onClick={() => setActiveTab("contacts")} aria-label="Contacts" title="Contacts"><Users size={20} /><span>Contacts</span></button>
+        <button className={`nav-item${activeTab === "followups" ? " selected" : ""}`} aria-current={activeTab === "followups" ? "page" : undefined} onClick={() => setActiveTab("followups")} aria-label="Tickets & deals" title="Tickets & deals"><Plus size={20} /><span>Tickets & deals</span></button>
+        <button className={`nav-item${activeTab === "powerdialer" ? " selected" : ""}`} aria-current={activeTab === "powerdialer" ? "page" : undefined} onClick={() => setActiveTab("powerdialer")} aria-label="Powerdialer" title="Powerdialer"><Lightning size={20} /><span>Powerdialer</span></button>
+        {canPurchaseNumber && <button className={`nav-item${activeTab === "center" ? " selected" : ""}`} aria-current={activeTab === "center" ? "page" : undefined} onClick={() => setActiveTab("center")} aria-label="IVR & files d’attente" title="IVR & files d’attente"><Headset size={20}/><span>IVR & files d’attente</span></button>}
+        {canPurchaseNumber && <button className={`nav-item statistics-nav-item${activeTab === "statistics" ? " selected" : ""}`} aria-current={activeTab === "statistics" ? "page" : undefined} onClick={() => setActiveTab("statistics")} aria-label="Statistiques" title="Statistiques"><ChartBar size={20}/><span>Statistiques</span></button>}
+        {canPurchaseNumber && <button className={`nav-item admin-nav-item${activeTab === "admin" ? " selected" : ""}`} aria-current={activeTab === "admin" ? "page" : undefined} onClick={() => setActiveTab("admin")} aria-label="Administration" title="Administration"><ShieldCheck size={20} /><span>Administration</span></button>}
+        <button className={`nav-item mobile-settings${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")} aria-label="Réglages" title="Réglages"><GearSix size={20} /><span>Réglages</span></button>
       </nav>
       <div className="sidebar-bottom">
         <div className="sidebar-line"><span className="side-label">VOTRE LIGNE</span>{lineOptions.length > 1 ? <select aria-label="Ligne active" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked} onChange={(event) => selectLine(event.target.value)}>{lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>)}</select> : <strong>{activeLine ? formatPhone(activeLine.phone_number) : "Aucune ligne attribuée"}</strong>}<span className="line-availability"><i className={voiceTabOwner && voiceRegisteredRef.current ? "available" : ""} />{voiceTabOwner && voiceRegisteredRef.current ? "Disponible pour les appels" : activeLine ? voiceStatus : "Ajoutez une ligne pour commencer"}</span>{canPurchaseNumber && <button className="text-button" disabled={!canBuy || conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={14} />Ajouter une ligne</button>}</div>
-        <button className={`nav-item${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")}><GearSix size={20} /><span>Réglages</span></button>
-        <button className="profile-button" onClick={() => setActiveTab("settings")}><Avatar name={session.user.email ?? "Moi"} /><span><b>{session.user.email?.split("@")[0] ?? "Mon compte"}</b><small>{canPurchaseNumber ? "Administrateur" : "Membre de l’équipe"}</small></span></button>
+        <button className={`nav-item${activeTab === "settings" ? " selected" : ""}`} aria-current={activeTab === "settings" ? "page" : undefined} onClick={() => setActiveTab("settings")} aria-label="Réglages" title="Réglages"><GearSix size={20} /><span>Réglages</span></button>
+        <button className="profile-button" onClick={() => setActiveTab("settings")} aria-label="Réglages" title="Réglages"><Avatar name={session.user.email ?? "Moi"} /><span><b>{session.user.email?.split("@")[0] ?? "Mon compte"}</b><small>{canPurchaseNumber ? "Administrateur" : "Membre de l’équipe"}</small></span></button>
       </div>
     </aside>
 
     <main className="main-area">
-      {selectedOrg && services?.administrationEnabled && <QueuePresence key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api}/>}
-      <header className="topbar"><div className="topbar-title"><h1>{sectionTitle}</h1><span>{organizationName}</span></div><div className="topbar-actions">{voiceState === "active" && providerCallSid && <button className="button button-secondary" onClick={() => setTranscriptTarget({ providerCallSid })}><TextAlignLeft size={17} />Transcription</button>}<button className="icon-button" aria-label="Actualiser l’espace" title="Actualiser" disabled={workspaceState === "loading"} onClick={() => { setAdminRefresh((value) => value + 1); void retryWorkspace(); }}><ArrowClockwise size={18} /></button><button className="button button-secondary" disabled={voiceState === "idle" && !incomingFrom && (!canCall || busy || powerDialerLocked)} onClick={() => openCall()}><Phone size={17} /><span>{voiceState !== "idle" || incomingFrom ? "Appel en cours" : "Nouvel appel"}</span></button></div></header>
+      {selectedOrg && services?.administrationEnabled && <QueuePresence key={`presence:${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api}/>}
+      <header className="topbar"><div className="topbar-title"><span>{organizationName}</span><span className="breadcrumb-slash" aria-hidden="true">/</span><h1>{sectionTitle}</h1></div><div className="topbar-actions">{voiceState === "active" && providerCallSid && <button className="button button-secondary" onClick={() => setTranscriptTarget({ providerCallSid })}><TextAlignLeft size={17} />Transcription</button>}<button className="icon-button" aria-label="Actualiser l’espace" title="Actualiser" disabled={workspaceState === "loading"} onClick={() => { setAdminRefresh((value) => value + 1); void retryWorkspace(); }}><ArrowClockwise size={18} /></button><button className="button button-secondary" disabled={voiceState === "idle" && !incomingFrom && (!canCall || busy || powerDialerLocked)} onClick={() => openCall()}><Phone size={17} /><span>{voiceState !== "idle" || incomingFrom ? "Appel en cours" : "Nouvel appel"}</span></button></div></header>
       <div className="mobile-line-switch"><label>Votre ligne<select aria-label="Ligne active sur mobile" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked || !lineOptions.length} onChange={(event) => selectLine(event.target.value)}>{lineOptions.length ? lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>) : <option value="">Aucune ligne attribuée</option>}</select></label></div>
       {services && (!services.voiceEnabled || !services.smsEnabled || services.operationsPaused || !services.administrationEnabled) && <div className="app-banner warning" role="status"><WarningCircle size={18}/><span>{services.operationsPaused ? services.pauseMessage : [!services.voiceEnabled && "Appels désactivés.", !services.smsEnabled && "SMS désactivés.", !services.administrationEnabled && "Administration non configurée."].filter(Boolean).join(" ")} {canPurchaseNumber && "La configuration serveur doit être terminée pour activer ces services."}</span></div>}
       {!networkOnline && <div className="app-banner warning" role="status"><WarningCircle size={18} /><span>Vous êtes hors ligne. Reconnectez-vous pour retrouver vos échanges.</span></div>}
@@ -1191,17 +1191,32 @@ export default function App() {
         onOpen={openConversation} onNew={() => setNewConversationOpen(true)}
         onBack={() => { drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody; setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); }}
         onTranscript={(callId) => setTranscriptTarget({ callId })} onBody={setMessageBody} onSend={sendMessage} onCall={openCall} onAddContact={newContact} onRetry={() => void retryWorkspace()}
-      /> : activeTab === "center" ? (canPurchaseNumber && selectedOrg ? <CallCenter key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} refreshKey={adminRefresh} audio={async path => { const response = await fetch(`${apiBase}${path}`, { headers: { authorization: `Bearer ${authToken}` } }); if (!response.ok) throw new Error("L’enregistrement est indisponible."); return response.blob(); }} /> : <EmptyState icon={<Headset/>} title="Accès administrateur requis"/>) : activeTab === "contacts" ? <Contacts contacts={contacts} search={contactSearch} busy={busy || !networkOnline || !selectedOrg} canCall={canCall && !powerDialerLocked && voiceState === "idle"} canSms={canSms && !conversationLocked} dataState={directory.state} error={directory.error} hasMore={directory.hasMore} loadingMore={directory.loadingMore} onMore={() => void directory.more()} onRetry={() => void directory.refresh()} onSearch={setContactSearch} onAdd={() => newContact()} onEdit={beginEditContact} onArchive={(contact) => void archiveContact(contact)} onCall={(contact) => openCall(contact.contact_phones[0]?.phone_number)} onMessage={(contact) => openConversation(contact.contact_phones[0]?.phone_number ?? "")} /> : activeTab === "admin" ? (canPurchaseNumber && selectedOrg ? <Admin key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} api={api} refreshKey={adminRefresh} purchaseEnabled={canBuy} onPurchase={() => setNumberPurchaseOpen(true)} onChanged={async () => { const result = await api<{ items: Organization[] }>("/v1/organizations"); setOrganizations(result.items); if (!result.items.some((item) => item.organization_id === selectedOrg && item.role === "admin")) setActiveTab("settings"); await refreshWorkspace(selectedOrg); }} /> : <EmptyState icon={<ShieldCheck size={26} />} title="Accès administrateur requis"><p>Choisissez un espace dans lequel vous êtes administrateur.</p></EmptyState>) : <section className="settings-page">
-        <div className="section-intro"><div><h2>Votre espace de travail</h2><p>Votre compte, vos lignes et vos appareils.</p></div></div>
-        <section className="settings-section"><h3>Mon compte</h3><div className="account-row"><Avatar name={session.user.email ?? "Moi"} /><div><b>{session.user.email}</b><p>{organizationName}</p></div><button className="button button-secondary" disabled={Boolean(pendingSmsAttempt) || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => void signOut()}><SignOut size={17} />Se déconnecter</button></div></section>
-        <section className="settings-section"><div className="settings-section-heading"><h3>Mes lignes</h3>{canPurchaseNumber && <button className="text-button" disabled={!canBuy || conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => setNumberPurchaseOpen(true)}><Plus size={16} />Ajouter une ligne</button>}</div>{lineOptions.map((item) => <div className="settings-line-row" key={item.lines!.id}><Phone size={21} /><div><b>{formatPhone(item.lines!.phone_number)}</b><p>{services?.voiceEnabled && !services.operationsPaused && item.can_voice && item.lines!.voice_enabled ? "Appels activés" : "Appels indisponibles"} · {services?.smsEnabled && !services.operationsPaused && item.can_sms && item.lines!.sms_enabled ? "SMS activés" : "SMS indisponibles"}</p></div>{item.lines!.id === activeLine?.id ? <span className="selected-line"><CheckCircle size={16} />Sélectionnée</span> : <button className="button button-secondary" disabled={conversationLocked || powerDialerLocked || busy || voiceState !== "idle"} onClick={() => selectLine(item.lines!.id)}>Utiliser cette ligne</button>}</div>)}{!lineOptions.length && <p className="settings-description">Aucune ligne attribuée pour le moment.</p>}</section>
-        <section className="settings-section"><div className="settings-section-heading"><h3>Appareils connectés</h3><span>{activeDevices.filter((device) => device.status === "active").length} actifs</span></div><p className="settings-description">Gérez les appareils autorisés à utiliser votre compte.</p>{activeDevices.map((device) => <div className="device-row" key={device.id}><span className="device-icon">{device.platform === "web" ? <Monitor /> : <DeviceMobile />}</span><div><b>{device.label || device.platform}</b><p>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${new Date(device.last_active_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : ""}</p></div>{device.status === "active" && <button className="text-button danger-text" disabled={busy || powerDialerLocked || voiceState !== "idle"} onClick={() => void revokeDevice(device.id)}>Révoquer</button>}</div>)}{!activeDevices.length && <EmptyState icon={<Monitor size={26} />} title="Aucun appareil enregistré"><p>Votre navigateur sera associé lors de l’activation des appels.</p></EmptyState>}</section>
-        <section className="settings-section"><h3>État des appels</h3><p className="voice-settings-status"><Microphone size={17} />{voiceStatus}</p>{services?.voiceEnabled && activeLine?.voice_enabled && activeAssignment?.can_voice && <button className="text-button" disabled={busy || voiceState !== "idle" || powerDialerLocked || !networkOnline} onClick={() => setVoiceRetry(value => value + 1)}>Reconnecter cet appareil</button>}<p className="settings-description">Un seul onglet reçoit vos appels à la fois. Si vous le fermez, un autre onglet ouvert prend le relais.</p></section>
-        {selectedOrg && <TagManager key={`${session.user.id}:${selectedOrg}`} api={api} organizationId={selectedOrg} />}
-        <ApiIntegrations key={`${session.user.id}:${selectedOrg}:${canPurchaseNumber}`} api={api} organizationId={selectedOrg} isAdmin={canPurchaseNumber}/>
-        <McpIntegrations key={session.user.id} api={api} initialDraftId={new URLSearchParams(window.location.search).get("mcpSms") ?? ""}/>
-        <p className="settings-version">onoff · Version {webPackage.version}</p>
-      </section>}
+      /> : activeTab === "center" ? (canPurchaseNumber && selectedOrg ? <CallCenter key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} refreshKey={adminRefresh} audio={async path => { const response = await fetch(`${apiBase}${path}`, { headers: { authorization: `Bearer ${authToken}` } }); if (!response.ok) throw new Error("L’enregistrement est indisponible."); return response.blob(); }} /> : <EmptyState icon={<Headset/>} title="Accès administrateur requis"/>) : activeTab === "contacts" ? <Contacts contacts={contacts} search={contactSearch} busy={busy || !networkOnline || !selectedOrg} canCall={canCall && !powerDialerLocked && voiceState === "idle"} canSms={canSms && !conversationLocked} dataState={directory.state} error={directory.error} hasMore={directory.hasMore} loadingMore={directory.loadingMore} onMore={() => void directory.more()} onRetry={() => void directory.refresh()} onSearch={setContactSearch} onAdd={() => newContact()} onEdit={beginEditContact} onArchive={(contact) => void archiveContact(contact)} onCall={(contact) => openCall(contact.contact_phones[0]?.phone_number)} onMessage={(contact) => openConversation(contact.contact_phones[0]?.phone_number ?? "")} /> : activeTab === "admin" ? (canPurchaseNumber && selectedOrg ? <Admin key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} api={api} refreshKey={adminRefresh} purchaseEnabled={canBuy} onPurchase={() => setNumberPurchaseOpen(true)} onChanged={async () => { const result = await api<{ items: Organization[] }>("/v1/organizations"); setOrganizations(result.items); if (!result.items.some((item) => item.organization_id === selectedOrg && item.role === "admin")) setActiveTab("settings"); await refreshWorkspace(selectedOrg); }} /> : <EmptyState icon={<ShieldCheck size={26} />} title="Accès administrateur requis"><p>Choisissez un espace dans lequel vous êtes administrateur.</p></EmptyState>) : <Settings
+        key={`settings:${session.user.id}:${selectedOrg}`}
+        api={api}
+        email={session.user.email}
+        organizationId={selectedOrg}
+        organizationName={organizationName}
+        lines={lineOptions}
+        activeLineId={activeLine?.id}
+        devices={activeDevices}
+        services={services}
+        isAdmin={canPurchaseNumber}
+        voiceStatus={voiceStatus}
+        canReconnect={Boolean(services?.voiceEnabled && activeLine?.voice_enabled && activeAssignment?.can_voice)}
+        disabledActions={{
+          signOut: Boolean(pendingSmsAttempt) || powerDialerLocked || busy || voiceState !== "idle",
+          lines: conversationLocked || powerDialerLocked || busy || voiceState !== "idle",
+          purchase: !canBuy || conversationLocked || powerDialerLocked || busy || voiceState !== "idle",
+          devices: busy || powerDialerLocked || voiceState !== "idle",
+          reconnect: busy || voiceState !== "idle" || powerDialerLocked || !networkOnline,
+        }}
+        onSignOut={() => void signOut()}
+        onPurchase={() => setNumberPurchaseOpen(true)}
+        onSelectLine={selectLine}
+        onRevokeDevice={(id) => void revokeDevice(id)}
+        onReconnect={() => setVoiceRetry((value) => value + 1)}
+      />}
     </main>
 
     {(voiceState !== "idle" || incomingFrom) && !dialerOpen && !(powerDialerLocked && activeTab === "powerdialer") && <button className="active-call-bar" onClick={() => powerDialerLocked ? setActiveTab("powerdialer") : setDialerOpen(true)}><Phone size={19} /><span>{incomingFrom ? "Appel entrant" : voiceStatus}</span><ArrowRight size={17} /></button>}

@@ -1,5 +1,6 @@
+import { themedStyles } from "./theme";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, AppState, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Text, View } from "react-native";
 import { requireOptionalNativeModule } from "expo";
 import { transcriptTime, type CallRecording } from "@onoff/api-client";
 import { Icon, Touch, palette } from "./ui";
@@ -53,10 +54,10 @@ function ReadyPlayer({ callId, recording, getAudioSource, blocked }: Props) {
     </View><Text accessibilityLiveRegion="polite" style={[s.caption, !!error && { color: palette.red }]}>{error || (blocked ? "L’écoute sera disponible après l’appel en cours." : waiting ? "Chargement de l’audio…" : "Les deux voix · depuis le démarrage de la transcription")}</Text>
   </View>;
 }
-const s = StyleSheet.create({
-  container: { paddingHorizontal: 22, paddingVertical: 15, backgroundColor: "#F8FAF8", borderBottomWidth: 1, borderColor: palette.line },
+const s = themedStyles({
+  container: { paddingHorizontal: 22, paddingVertical: 15, backgroundColor: palette.surface, borderBottomWidth: 1, borderColor: palette.line },
   heading: { flexDirection: "row", alignItems: "center", gap: 7 }, title: { fontSize: 11, fontWeight: "600", color: palette.accent }, tag: { marginLeft: "auto", fontSize: 9, color: palette.muted },
-  controls: { flexDirection: "row", alignItems: "center", gap: 13, marginTop: 13 }, play: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: palette.accent }, disabled: { backgroundColor: "#DFE7E0" }, track: { flex: 1 },
-  seek: { minHeight: 30, justifyContent: "center" }, line: { height: 4, backgroundColor: "#DEE6DF", borderRadius: 3 }, progress: { height: 4, backgroundColor: palette.accent, borderRadius: 3 },
+  controls: { flexDirection: "row", alignItems: "center", gap: 13, marginTop: 13 }, play: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: palette.accent }, disabled: { backgroundColor: palette.line }, track: { flex: 1 },
+  seek: { minHeight: 30, justifyContent: "center" }, line: { height: 4, backgroundColor: palette.line, borderRadius: 3 }, progress: { height: 4, backgroundColor: palette.accent, borderRadius: 3 },
   times: { flexDirection: "row", justifyContent: "space-between", marginTop: 3 }, time: { fontSize: 9, color: palette.muted, fontVariant: ["tabular-nums"] }, speed: { minWidth: 40, minHeight: 44, justifyContent: "center", alignItems: "center", borderRadius: 9, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.white }, speedText: { fontSize: 11, color: palette.accent }, caption: { fontSize: 10, lineHeight: 16, color: palette.muted, marginTop: 10 },
 });

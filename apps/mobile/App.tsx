@@ -1,3 +1,5 @@
+import { useFonts } from "expo-font";
+import { AmbientBackground, LineHighlight } from "./src/theme";
 import { createClient, type Session } from "@supabase/supabase-js";
 import mobilePackage from "./package.json";
 import { ApiClientError, buildInbox, createApiClient, getSmsSegmentInfo, phoneKey, type ApiPage, type CallRecord, type Contact, type Conversation, type InboxConversation } from "@onoff/api-client";
@@ -69,6 +71,13 @@ function friendlyError(error: unknown): string {
 }
 
 export default function App() {
+  const [fontsLoaded, fontError] = useFonts({
+    Inter400: require("@onoff/design-tokens/assets/Inter-400.ttf"),
+    Inter500: require("@onoff/design-tokens/assets/Inter-500.ttf"),
+    Inter600: require("@onoff/design-tokens/assets/Inter-600.ttf"),
+    Inter700: require("@onoff/design-tokens/assets/Inter-700.ttf"),
+  });
+  if (!fontsLoaded && !fontError) return <View style={styles.center}><ActivityIndicator accessibilityLabel="Chargement de l’application" color={palette.accent} /></View>;
   return <SafeAreaProvider initialMetrics={initialWindowMetrics}><MotionPreferences><MobileApp /></MotionPreferences></SafeAreaProvider>;
 }
 
@@ -1033,6 +1042,7 @@ function MobileApp() {
 
   const loading = <View style={{ padding: 40, alignItems: "center", gap: 12 }}><ActivityIndicator color={palette.accent} /><Text style={styles.rowMeta}>Chargement de votre espace…</Text></View>;
   const lineOverview = <Touch accessibilityLabel="Voir les réglages de votre ligne" style={styles.lineOverview} onPress={() => changeTab("settings")}>
+    <LineHighlight />
     <View style={styles.lineIcon}><Icon name="phone-portrait-outline" color={palette.accent} /></View>
     <View style={styles.rowCopy}><Text style={styles.lineLabel}>{activeLine ? "Votre ligne professionnelle" : "Votre espace professionnel"}</Text><Text style={styles.lineNumber}>{activeLine?.phone_number ?? "Aucune ligne attribuée"}</Text></View>
     <Icon name="chevron-forward" size={17} color={palette.muted} />
@@ -1041,7 +1051,7 @@ function MobileApp() {
   function renderTab(tab: typeof tabs[number]) {
     const selected = activeTab === tab.id;
     return <Touch key={tab.id} accessibilityRole="tab" accessibilityLabel={tab.label} accessibilityState={{ selected }} onPress={() => changeTab(tab.id)} style={styles.tab}>
-      <View style={styles.tabIcon}><Icon name={tab.icon} size={21} color={selected ? palette.accent : palette.muted} /></View>
+      <View style={[styles.tabIcon, selected && { backgroundColor: palette.selected }]}><Icon name={tab.icon} size={21} color={selected ? palette.accent : palette.muted} /></View>
       {tab.id === "conversations" && unreadCount > 0 && <View style={styles.badge}><Text style={styles.badgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text></View>}
       <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9} style={[styles.tabLabel, selected && styles.tabActive]}>{tab.label}</Text>
     </Touch>;
@@ -1049,7 +1059,7 @@ function MobileApp() {
 
   if (!authReady) return <View style={styles.center}><ActivityIndicator color={palette.accent} /><Text style={styles.muted}>Ouverture de votre espace…</Text></View>;
   if (!session || recoveringPassword) {
-    return <SafeAreaView style={styles.authScreen}><KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+    return <SafeAreaView style={styles.authScreen}><AmbientBackground /><KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={styles.authContent} keyboardShouldPersistTaps="handled">
         <View style={styles.authCard}>
@@ -1075,6 +1085,7 @@ function MobileApp() {
   const isThread = activeTab === "conversations" && messageComposerVisible;
   const tabTitle = isThread ? (selectedConversationContactName ?? (messageDestination || "Nouvelle conversation")) : tabs.find((tab) => tab.id === activeTab)?.label ?? "Onoff";
   return <SafeAreaView style={styles.app} edges={["top", "left", "right"]}>
+    <AmbientBackground />
     <StatusBar barStyle="dark-content" />
     <View style={styles.header}>
       {isThread && <IconButton icon="chevron-back" label="Revenir aux conversations" onPress={() => { Keyboard.dismiss(); setMessageComposerVisible(false); }} />}

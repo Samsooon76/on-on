@@ -1,0 +1,8 @@
+.section-tabs { display: flex; gap: 25px; border-bottom: 1px solid var(--line); margin-bottom: 25px; overflow-x: auto; }
+.section-tabs button { display: flex; align-items: center; gap: 8px; flex-shrink: 0; background: none; padding: 12px 0 15px; border: 0; border-bottom: 2px solid transparent; font-size: 12px; color: var(--muted); }
+.section-tabs button:hover { color: var(--accent); }
+.section-tabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 500; }
+.section-tabs button span { font-size: 10px; background: var(--accent-soft); padding: 2px 6px; border-radius: 4px; }
+.section-tabs button:focus-visible { outline-offset: -2px; }
+@media (max-width: 1023px) { .section-tabs { gap: 19px; } }
+@media (max-width: 767px) { .section-tabs { gap: 22px; } .section-tabs button { font-size: 11px; } }

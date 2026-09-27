@@ -1,23 +1,23 @@
 .call-create { margin-top: 18px; min-width: 0; }
 .call-create-trigger { width: 100%; justify-content: center; }
-.call-create-panel { margin-top: 12px; padding: 16px; border: 1px solid var(--line, #dfe5e0); border-radius: 10px; background: #fafcfa; }
+.call-create-panel { margin-top: 12px; padding: 16px; border: 1px solid var(--line, var(--line)); border-radius: 10px; background: var(--canvas); }
 .call-create-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .call-create-heading h3 { font-size: 14px; font-weight: 550; }
-.call-create-context { font-size: 11px; color: #64796c; line-height: 1.6; margin: 5px 0 15px; overflow-wrap: anywhere; }
+.call-create-context { font-size: 11px; color: var(--muted); line-height: 1.6; margin: 5px 0 15px; overflow-wrap: anywhere; }
 .call-create-options { display: grid; gap: 7px; }
-.call-create-options > button { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid #dfe5e0; border-radius: 7px; background: white; color: var(--accent); text-align: left; }
-.call-create-options > button:hover:not(:disabled) { background: var(--accent-soft, #ecf4ef); border-color: #a3b9ab; }
+.call-create-options > button { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: white; color: var(--accent); text-align: left; }
+.call-create-options > button:hover:not(:disabled) { background: var(--accent-soft, var(--surface)); border-color: var(--muted); }
 .call-create-options span { display: grid; gap: 4px; }
 .call-create-options b { color: var(--ink); font-size: 12px; font-weight: 550; }
-.call-create-options small { font-size: 11px; color: #64796c; }
+.call-create-options small { font-size: 11px; color: var(--muted); }
 .call-create-form { display: grid; gap: 13px; }
 .call-create-form textarea { resize: vertical; min-height: 80px; }
 .call-create-form input, .call-create-form select, .call-create-form textarea { width: 100%; min-width: 0; background: white; }
-.call-create-form select, .call-create-form textarea, .followups-page select { min-height: 40px; padding: 10px 12px; border: 1px solid #dfe5e0; border-radius: 6px; background: #fff; color: var(--ink); font-size: 13px; }
+.call-create-form select, .call-create-form textarea, .followups-page select { min-height: 40px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font-size: 13px; }
 .call-create-form .modal-actions { flex-wrap: wrap; }
 .call-create-success { display: flex; align-items: flex-start; gap: 7px; color: var(--accent); font-size: 12px; line-height: 1.6; margin-top: 12px; }
 .call-create-success svg { flex-shrink: 0; margin-top: 2px; }
-.call-wrapup-note { font-size: 12px; color: #64796c; text-align: center; line-height: 1.7; margin-top: 14px; }
+.call-wrapup-note { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.7; margin-top: 14px; }
 .call-dialog.has-actions { max-width: 460px; width: min(460px, calc(100vw - 32px)); }
 .call-dialog.has-actions.has-transcript { max-width: 1010px; width: min(1010px, calc(100vw - 32px)); }
 .has-actions.has-transcript .call-dialog-layout { grid-template-columns: minmax(300px, 1fr) minmax(0, 1.1fr); }
@@ -26,12 +26,12 @@
 .followups-page { padding: 30px; overflow: auto; flex: 1; min-height: 0; }
 .followups-page > header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
 .followups-page h2 { font-size: 21px; font-weight: 500; }
-.followups-page header p { margin-top: 8px; color: #64796c; font-size: 13px; }
+.followups-page header p { margin-top: 8px; color: var(--muted); font-size: 13px; }
 .followups-list { display: grid; gap: 12px; margin-bottom: 20px; }
-.followups-list article { display: flex; align-items: flex-start; gap: 16px; border: 1px solid #dfe5e0; border-radius: 10px; padding: 20px; }
+.followups-list article { display: flex; align-items: flex-start; gap: 16px; border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
 .followup-icon { color: var(--accent); margin-top: 3px; }
 .followup-content { flex: 1; min-width: 0; }
-.followup-content small, .followup-content p { color: #64796c; font-size: 12px; line-height: 1.7; }
+.followup-content small, .followup-content p { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .followup-content h3 { font-size: 16px; font-weight: 550; margin: 6px 0; overflow-wrap: anywhere; }
 .followup-description { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 12px; }
 .followup-content .text-button { margin-top: 12px; }

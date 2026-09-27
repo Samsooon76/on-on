@@ -192,6 +192,8 @@ PODS:
     - ExpoModulesCore
   - ExpoKeepAwake (57.0.2):
     - ExpoModulesCore
+  - ExpoLinearGradient (57.0.2):
+    - ExpoModulesCore
   - ExpoLinking (57.0.11):
     - ExpoModulesCore
   - ExpoLogBox (57.0.4):
@@ -2147,6 +2149,7 @@ DEPENDENCIES:
   - "ExpoFont (from `../../../node_modules/.pnpm/expo-font@57.0.4_expo@57.0.25_react-native@0.86.3_@babel+core@7.29.7_@types+react@19.2.4_react@19.2.3__react@19.2.3/node_modules/expo-font/ios/ExpoFont.podspec`)"
   - "ExpoHaptics (from `../../../node_modules/.pnpm/expo-haptics@57.0.3_expo@57.0.25/node_modules/expo-haptics/ios`)"
   - "ExpoKeepAwake (from `../../../node_modules/.pnpm/expo-keep-awake@57.0.2_expo@57.0.25_react@19.2.3/node_modules/expo-keep-awake/ios`)"
+  - "ExpoLinearGradient (from `../../../node_modules/.pnpm/expo-linear-gradient@57.0.2_expo@57.0.25_react-native@0.86.3_@babel+core@7.29.7_@types+_61c77f86116de5efceec140b6a0a67de/node_modules/expo-linear-gradient/ios`)"
   - "ExpoLinking (from `../../../node_modules/.pnpm/expo-linking@57.0.11_expo@57.0.25_react-native@0.86.3_@babel+core@7.29.7_@types+react@19.2.4_react@19.2.3__react@19.2.3/node_modules/expo-linking/ios`)"
   - "ExpoLogBox (from `../../../node_modules/.pnpm/@expo+log-box@57.0.4_@expo+dom-webview@57.0.1_expo@57.0.25_react-native@0.86.3_@babel+c_396c5bdb865bdf2ad0f93d9fdea1fd80/node_modules/@expo/log-box`)"
   - "ExpoModulesCore (from `../../../node_modules/.pnpm/expo-modules-core@57.0.19_react-native@0.86.3_@babel+core@7.29.7_@types+react@19.2.4_react@19.2.3__react@19.2.3/node_modules/expo-modules-core/ExpoModulesCore.podspec`)"
@@ -2269,6 +2272,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/.pnpm/expo-haptics@57.0.3_expo@57.0.25/node_modules/expo-haptics/ios"
   ExpoKeepAwake:
     :path: "../../../node_modules/.pnpm/expo-keep-awake@57.0.2_expo@57.0.25_react@19.2.3/node_modules/expo-keep-awake/ios"
+  ExpoLinearGradient:
+    :path: "../../../node_modules/.pnpm/expo-linear-gradient@57.0.2_expo@57.0.25_react-native@0.86.3_@babel+core@7.29.7_@types+_61c77f86116de5efceec140b6a0a67de/node_modules/expo-linear-gradient/ios"
   ExpoLinking:
     :path: "../../../node_modules/.pnpm/expo-linking@57.0.11_expo@57.0.25_react-native@0.86.3_@babel+core@7.29.7_@types+react@19.2.4_react@19.2.3__react@19.2.3/node_modules/expo-linking/ios"
   ExpoLogBox:
@@ -2457,6 +2462,7 @@ SPEC CHECKSUMS:
   ExpoFont: f8198a952ba2ff53c9b393b5269ea435f232cfc3
   ExpoHaptics: 32efd02d88953d30a5c2ff796c0fce692e7bcd2e
   ExpoKeepAwake: 72af0b3be3615e59bc819d26061ff4e06b155ee0
+  ExpoLinearGradient: f08a0dea5ad3fe23042d15b1ced831312c9141b8
   ExpoLinking: 52819633a2225a0c2a3cd3de64056b021bb55202
   ExpoLogBox: 80957303325cd4439137765c90a87d7f22aaf2ff
   ExpoModulesCore: 090f9b1cede6c830823571336437bc7d3a7c8fe4

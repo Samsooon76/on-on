@@ -1,5 +1,6 @@
+import { themedStyles } from "./theme";
 import { useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ScrollView, Text, TextInput, View } from "react-native";
 import { editDialNumber, isDialableNumber } from "./phone";
 import { ActionButton, Icon, Sheet, Touch, feedback, palette } from "./ui";
 
@@ -31,18 +32,18 @@ export function Dialer({ initialNumber, lineNumber, canCall, unavailableReason, 
   </Sheet>;
 }
 
-const s = StyleSheet.create({
+const s = themedStyles({
   content: { flexGrow: 1, alignItems: "center", paddingHorizontal: 24, paddingBottom: 22, maxWidth: 430, width: "100%", alignSelf: "center" },
   line: { flexDirection: "row", gap: 7, alignItems: "center", justifyContent: "center", paddingVertical: 8, paddingHorizontal: 12 },
   lineText: { fontSize: 12, fontWeight: "400", color: palette.muted },
   numberArea: { width: "100%", minHeight: 142, justifyContent: "center", paddingTop: 20, paddingBottom: 14 },
-  number: { fontSize: 30, fontWeight: "300", color: palette.ink, textAlign: "center", minHeight: 48, letterSpacing: 0.2, paddingVertical: 5 },
+  number: { fontSize: 30, fontWeight: "500", color: palette.ink, textAlign: "center", minHeight: 48, letterSpacing: 0.2, paddingVertical: 5 },
   longNumber: { fontSize: 22 },
   contactLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, minHeight: 44 },
   contactLinkText: { fontSize: 13, fontWeight: "400", color: palette.accent },
   grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", width: "100%", maxWidth: 304, gap: 12 },
-  key: { width: "29%", aspectRatio: 1.18, borderRadius: 12, backgroundColor: palette.surface, alignItems: "center", justifyContent: "center" },
-  digit: { fontSize: 30, lineHeight: 38, color: palette.ink, fontWeight: "300" },
+  key: { width: "29%", aspectRatio: 1.18, borderRadius: 14, borderWidth: 1, borderColor: palette.line, backgroundColor: "#FFFFFFCC", alignItems: "center", justifyContent: "center" },
+  digit: { fontSize: 30, lineHeight: 38, color: palette.ink, fontWeight: "500" },
   letters: { fontSize: 9, letterSpacing: 1.5, color: palette.muted, fontWeight: "400", minHeight: 14 },
   actions: { flexDirection: "row", alignItems: "center", justifyContent: "center", width: "100%", marginTop: 28, gap: 5 },
   call: { flex: 1, maxWidth: 210 },

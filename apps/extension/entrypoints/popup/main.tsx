@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createComposeUrl, createTagsUrl, extractSelectedPhone, normalizeWebAppUrl } from "../../src/phone.js";
+import { ArrowUpRight, CheckCircle, CursorClick, GearSix, Phone, Tag } from "@phosphor-icons/react";
+import "@onoff/design-tokens/theme.css";
 import "./style.css";
 
 const WEB_APP_URL_KEY = "onoff:web-app-url";
@@ -82,28 +84,28 @@ function Popup() {
     <main className="popup-shell">
       <header className="popup-header">
         <span className="brand-mark" aria-hidden="true">o</span>
-        <div><strong>Onoff</strong><small>Click-to-call</small></div>
-        <button type="button" className="settings-toggle" aria-label="Configurer l’application" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}>⚙</button>
+        <div><strong>onoff</strong><small>Votre téléphone, à portée de clic.</small></div>
+        <button type="button" className={`settings-toggle${settingsOpen ? " active" : ""}`} aria-controls="popup-settings" aria-label="Configurer l’application" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}><GearSix size={19} /></button>
       </header>
 
       {settingsOpen && (
-        <label className="field settings-field">Adresse de l’application Onoff
+        <label id="popup-settings" className="field settings-field">Adresse de l’application Onoff
           <input type="url" inputMode="url" value={webAppUrl} onChange={(event) => setWebAppUrl(event.target.value)} placeholder="https://app.exemple.fr" autoComplete="url" />
           <small>HTTPS requis. HTTP est accepté uniquement sur localhost pour le développement.</small>
         </label>
       )}
 
       <form onSubmit={(event) => void openComposer(event)}>
-        <div className="form-heading"><span className="eyebrow">NOUVEL APPEL</span><h1>Ouvrir le composeur</h1><p>Choisissez un numéro dans la page ou saisissez-le directement.</p></div>
-        <button className="selection-button" type="button" disabled={busy} onClick={() => void readSelection()}><span aria-hidden="true">↳</span> Récupérer la sélection</button>
+        <div className="form-heading"><span className="call-symbol"><Phone size={23} /></span><span className="eyebrow">NOUVEL APPEL</span><h1>Gardez le contact.</h1><p>Choisissez un numéro dans la page ou saisissez-le directement.</p></div>
+        <button className="selection-button" type="button" disabled={busy} onClick={() => void readSelection()}><CursorClick size={17} /> Récupérer la sélection</button>
         <label className="field">Numéro de téléphone
           <input type="tel" inputMode="tel" value={destination} onChange={(event) => setDestination(event.target.value)} placeholder="06 12 34 56 78 ou +33…" autoComplete="tel" maxLength={64} />
         </label>
         {notice && <p className="notice" role="status">{notice}</p>}
-        <button className="open-button" type="submit" disabled={busy || !destination.trim()}><span aria-hidden="true">↗</span> Ouvrir dans Onoff</button>
+        <button className="open-button" type="submit" disabled={busy || !destination.trim()}>Ouvrir dans Onoff <ArrowUpRight size={18} /></button>
       </form>
-      <section className="tags-shortcut"><h2>AI call tag</h2><p>Classez vos appels avec Jev à partir des transcriptions et des prompts de vos tags.</p><button type="button" className="selection-button" disabled={busy} onClick={() => void openTags()}>Gérer les tags et l’IA ↗</button></section>
-      <footer>La page visitée ne transmet que le texte sélectionné. L’appel reste dans l’application Onoff.</footer>
+      <section className="tags-shortcut"><div className="shortcut-heading"><Tag size={19} /><h2>AI call tag</h2></div><p>Classez vos appels avec Jev à partir des transcriptions et des prompts de vos tags.</p><button type="button" className="selection-button" disabled={busy} onClick={() => void openTags()}>Gérer les tags et l’IA <ArrowUpRight size={16} /></button></section>
+      <footer><CheckCircle size={15} /><span>La page visitée ne transmet que le texte sélectionné. L’appel reste dans l’application Onoff.</span></footer>
     </main>
   );
 }

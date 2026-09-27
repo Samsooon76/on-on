@@ -1,3 +1,4 @@
+import { themedStyles } from "./theme";
 import { buildTimeline, callLabel, formatDuration, initials, isMissedCall, type CallRecord, type InboxConversation, type MessageRecord } from "@onoff/api-client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from "react-native";
@@ -100,7 +101,7 @@ export function ConversationThread(props: {
   </View>;
 }
 
-const s = StyleSheet.create({
+const s = themedStyles({
   loading: { padding: 32, alignItems: "center", gap: 10 },
   filterBadge: { borderRadius: 4, paddingHorizontal: 5, backgroundColor: palette.green },
   filterCount: { fontSize: 10, fontWeight: "500", color: palette.accent },
