@@ -59,7 +59,9 @@ function setup(t, options = {}) {
   const app = createApp(config, {
     createSupabaseClient: () => ({ from, rpc, auth: {
       getUser: async () => ({ data: { user: { id: user, is_anonymous: false } }, error: null }),
-      getClaims: async () => ({ data: { claims: options.claims ?? claims }, error: options.invalidSignature ? new Error("signature") : null }),
+      getClaims: async (jwt) => jwt === "user-session"
+        ? { data: { claims: { sub: user, role: "authenticated", aud: "authenticated", is_anonymous: false } }, error: null }
+        : { data: { claims: options.claims ?? claims }, error: options.invalidSignature ? new Error("signature") : null },
     } }),
     createSmsProvider: () => ({ messages: { create: async () => { sent++; if (options.timeout) throw new Error("timeout"); return { sid: "SM11111111111111111111111111111111", status: "sent" }; } } }),
   });

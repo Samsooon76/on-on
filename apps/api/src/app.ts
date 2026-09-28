@@ -7,7 +7,10 @@ import { hasZodFastifySchemaValidationErrors, serializerCompiler, validatorCompi
 import { callIntentCreateSchema, contactCreateSchema, contactUpdateSchema, deviceCreateSchema, lineAssignmentUpdateSchema, messageCreateSchema, normalizePhoneNumber, paginationSchema, uuidSchema, voiceTargetSchema, type Database } from "@onoff/contracts";
 import type { AppConfig } from "./config.js";
 import { requestBodySchemas, responsesForRoute } from "./response-schemas.js";
-import { findAssignedLine, getActiveOrganizationIds, isActiveOrganizationAdmin } from "./repositories/access.js";
+import { authenticateBearer } from "./authentication.js";
+import { decodeCursor, encodeCursor } from "./cursor.js";
+import { callsPageSchema, callsResponse, inboxPageSchema, inboxResponse, threadPageSchema, threadResponse } from "./history-pages.js";
+import { isActiveOrganizationAdmin } from "./repositories/access.js";
 import { persistLineAssignment } from "./repositories/line-assignments.js";
 import { createVoiceAccessToken } from "./voice.js";
 import { createNumberProvider, registerNumberRoutes, type NumberProvider } from "./number-provisioning.js";
@@ -44,53 +47,12 @@ export type ApiDependencies = {
   scribeSocketFactory?: ScribeSocketFactory;
 };
 
-type PageCursor = { createdAt: string; id: string };
 const voiceDiagnosticSchema = z.object({
   event: z.enum(["voice_registration_failed", "history_refresh_succeeded", "history_refresh_failed"]),
   platform: z.enum(["web", "ios", "android"]),
   appVersion: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/).max(32),
   durationMs: z.number().int().min(0).max(300_000).optional(),
 });
-
-
-function decodeCursor(value: string | undefined): PageCursor | null | false {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
-    if (typeof parsed.createdAt !== "string" || !Number.isFinite(Date.parse(parsed.createdAt)) || typeof parsed.id !== "string" || !uuidSchema.safeParse(parsed.id).success) return false;
-    return { createdAt: new Date(parsed.createdAt).toISOString(), id: parsed.id };
-  } catch {
-    return false;
-  }
-}
-
-function encodeCursor(row: { id: string } & ({ created_at: string } | { last_message_at: string })): string {
-  const createdAt = "created_at" in row ? row.created_at : row.last_message_at;
-  return Buffer.from(JSON.stringify({ createdAt, id: row.id })).toString("base64url");
-}
-
-async function resolveUniqueContactNames(supabase: SupabaseClient<Database>, organizationId: string, phoneNumbers: string[]): Promise<Map<string, string>> {
-  const uniqueNumbers = [...new Set(phoneNumbers)];
-  if (!uniqueNumbers.length) return new Map();
-  const { data: phoneRows, error: phoneError } = await supabase.from("contact_phones")
-    .select("phone_number, contact_id").eq("organization_id", organizationId).in("phone_number", uniqueNumbers);
-  if (phoneError) throw new Error("Impossible de résoudre les contacts des activités.");
-  const contactIds = [...new Set((phoneRows ?? []).map((row) => row.contact_id))];
-  if (!contactIds.length) return new Map();
-  const { data: contacts, error: contactError } = await supabase.from("contacts")
-    .select("id, display_name").eq("organization_id", organizationId).is("archived_at", null).in("id", contactIds);
-  if (contactError) throw new Error("Impossible de résoudre les contacts des activités.");
-  const namesById = new Map((contacts ?? []).map((contact) => [contact.id, contact.display_name]));
-  const contactNamesByNumber = new Map<string, Map<string, string>>();
-  for (const row of phoneRows ?? []) {
-    const name = namesById.get(row.contact_id);
-    if (!name) continue;
-    const matches = contactNamesByNumber.get(row.phone_number) ?? new Map<string, string>();
-    matches.set(row.contact_id, name);
-    contactNamesByNumber.set(row.phone_number, matches);
-  }
-  return new Map([...contactNamesByNumber].flatMap(([number, matches]) => matches.size === 1 ? [[number, [...matches.values()][0]!] as const] : []));
-}
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -268,11 +230,11 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       global: { headers: { Authorization: `Bearer ${match[1]}` } },
     });
-    const { data, error } = await userClient.auth.getUser(match[1]);
-    if (error || !data.user || data.user.is_anonymous) {
+    const userId = await authenticateBearer(userClient, match[1], request.method);
+    if (!userId) {
       return reply.code(401).send({ code: "unauthorized", message: "Session invalide ou expirée.", requestId: request.id });
     }
-    request.context = { userId: data.user.id, accessToken: match[1], supabase: userClient };
+    request.context = { userId, accessToken: match[1], supabase: userClient };
   });
 
   registerCustomerWebhooks(routes, config, serviceSupabase);
@@ -390,11 +352,8 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     const id = uuidSchema.safeParse(request.params.id);
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
     if (!id.success) return reply.code(400).send({ code: "invalid_request", message: "Identifiant de contact invalide.", requestId: request.id });
-    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
-    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
-    const organizationIds = organizationScope.data ?? [];
-    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
-    const { data, error } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").in("organization_id", organizationIds).eq("id", id.data).is("archived_at", null).maybeSingle();
+    // Row level security limits contacts to organizations where the caller is an active member.
+    const { data, error } = await context.supabase.from("contacts").select("id, organization_id, display_name, email, version, created_at, contact_phones(id, phone_number, label)").eq("id", id.data).is("archived_at", null).maybeSingle();
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
     if (!data) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
     return data;
@@ -407,11 +366,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!id.success) return reply.code(400).send({ code: "invalid_request", message: "Identifiant de contact invalide.", requestId: request.id });
     const parsed = contactUpdateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ code: "invalid_contact", message: "Vérifiez les champs et la version du contact.", requestId: request.id });
-    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
-    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
-    const organizationIds = organizationScope.data ?? [];
-    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
-    const { data: existing, error: readError } = await context.supabase.from("contacts").select("id, organization_id").in("organization_id", organizationIds).eq("id", id.data).is("archived_at", null).maybeSingle();
+    const { data: existing, error: readError } = await context.supabase.from("contacts").select("id, organization_id").eq("id", id.data).is("archived_at", null).maybeSingle();
     if (readError || !existing) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
     const { data: updatedId, error } = await context.supabase.rpc("update_contact_with_phones", {
       p_contact_id: id.data,
@@ -432,11 +387,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     const id = uuidSchema.safeParse(request.params.id);
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
     if (!id.success) return reply.code(400).send({ code: "invalid_request", message: "Identifiant de contact invalide.", requestId: request.id });
-    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
-    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Le contact n'est pas disponible.", requestId: request.id });
-    const organizationIds = organizationScope.data ?? [];
-    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
-    const { data, error } = await context.supabase.from("contacts").update({ archived_at: new Date().toISOString() }).in("organization_id", organizationIds).eq("id", id.data).is("archived_at", null).select("id").maybeSingle();
+    const { data, error } = await context.supabase.from("contacts").update({ archived_at: new Date().toISOString() }).eq("id", id.data).is("archived_at", null).select("id").maybeSingle();
     if (error) return reply.code(503).send({ code: "contact_not_archived", message: "Le contact n'a pas pu être archivé.", requestId: request.id });
     if (!data) return reply.code(404).send({ code: "not_found", message: "Contact introuvable.", requestId: request.id });
     return reply.code(204).send();
@@ -445,11 +396,8 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
   routes.get("/v1/devices", async (request, reply) => {
     const context = request.context;
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
-    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
-    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Les appareils ne sont pas disponibles.", requestId: request.id });
-    const organizationIds = organizationScope.data ?? [];
-    if (!organizationIds.length) return { items: [] };
-    const { data, error } = await context.supabase.from("devices").select("id, organization_id, platform, label, status, last_active_at, created_at").in("organization_id", organizationIds).eq("user_id", context.userId).order("created_at", { ascending: false }).limit(50);
+    // Row level security keeps only devices of organizations where the caller is an active member.
+    const { data, error } = await context.supabase.from("devices").select("id, organization_id, platform, label, status, last_active_at, created_at").eq("user_id", context.userId).order("created_at", { ascending: false }).limit(50);
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "Les appareils ne sont pas disponibles.", requestId: request.id });
     return { items: data ?? [] };
   });
@@ -873,36 +821,30 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     return { id: assignment.id, status: "revoked" as const };
   });
 
+  // Each screen below is served by one SQL function that checks the caller's active
+  // membership and line assignment itself and returns NULL when there is no access.
+  // This keeps every screen at a single round trip to the database.
   routes.get<{ Params: { lineId: string }; Querystring: { limit?: string; cursor?: string } }>("/v1/lines/:lineId/calls", async (request, reply) => {
     const context = request.context;
     const lineId = uuidSchema.safeParse(request.params.lineId);
     const page = paginationSchema.safeParse(request.query);
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
     if (!lineId.success || !page.success) return reply.code(400).send({ code: "invalid_request", message: "Ligne ou pagination invalide.", requestId: request.id });
-    const cursor = decodeCursor(page.data.cursor);
+    const cursor = decodeCursor(page.data.cursor, { exact: true });
     if (cursor === false) return reply.code(400).send({ code: "invalid_request", message: "Curseur invalide.", requestId: request.id });
-    const scope = await findAssignedLine(context.supabase, context.userId, lineId.data, "can_voice");
-    if (scope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "L'historique n'est pas disponible.", requestId: request.id });
-    if (!scope.data) return reply.code(404).send({ code: "not_found", message: "Ligne introuvable.", requestId: request.id });
-    let query = context.supabase.from("calls").select("id, organization_id, line_id, direction, remote_number, status, started_at, answered_at, ended_at, duration_seconds, created_at").eq("organization_id", scope.data.organizationId).eq("line_id", scope.data.lineId).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(page.data.limit + 1);
-    if (cursor) query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
-    const { data, error } = await query;
+    const { data, error } = await context.supabase.rpc("list_line_calls", {
+      p_line_id: lineId.data,
+      p_limit: page.data.limit,
+      ...(cursor ? { p_cursor_at: cursor.createdAt, p_cursor_id: cursor.id } : {}),
+    });
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "L'historique n'est pas disponible.", requestId: request.id });
-    const items = data ?? [];
-    const hasMore = items.length > page.data.limit;
-    if (hasMore) items.pop();
-    let contactNames = new Map<string, string>();
-    if (items.length) {
-      try {
-        contactNames = await resolveUniqueContactNames(context.supabase, items[0]!.organization_id, items.map((call) => call.remote_number));
-      } catch {
-        request.log.warn({ requestId: request.id }, "call contact labels unavailable");
-      }
+    if (data === null) return reply.code(404).send({ code: "not_found", message: "Ligne introuvable.", requestId: request.id });
+    const result = callsPageSchema.safeParse(data);
+    if (!result.success) {
+      request.log.error({ requestId: request.id }, "call history function returned an unexpected shape");
+      return reply.code(503).send({ code: "data_unavailable", message: "L'historique n'est pas disponible.", requestId: request.id });
     }
-    return {
-      items: items.map((call) => ({ ...call, remoteContactName: contactNames.get(call.remote_number) ?? null })),
-      nextCursor: hasMore && items.length ? encodeCursor(items[items.length - 1]!) : null,
-    };
+    return callsResponse(result.data);
   });
 
   routes.get<{ Params: { lineId: string }; Querystring: { limit?: string; cursor?: string } }>("/v1/lines/:lineId/conversations", async (request, reply) => {
@@ -911,59 +853,21 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     const page = paginationSchema.safeParse(request.query);
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
     if (!lineId.success || !page.success) return reply.code(400).send({ code: "invalid_request", message: "Ligne ou pagination invalide.", requestId: request.id });
-    const cursor = decodeCursor(page.data.cursor);
+    const cursor = decodeCursor(page.data.cursor, { exact: true });
     if (cursor === false) return reply.code(400).send({ code: "invalid_request", message: "Curseur invalide.", requestId: request.id });
-    const scope = await findAssignedLine(context.supabase, context.userId, lineId.data, "can_sms");
-    if (scope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "Les conversations ne sont pas disponibles.", requestId: request.id });
-    if (!scope.data) return reply.code(404).send({ code: "not_found", message: "Ligne introuvable.", requestId: request.id });
-    let query = context.supabase.from("conversations").select("id, organization_id, line_id, remote_number, last_message_at")
-      .not("last_message_at", "is", null)
-      .eq("organization_id", scope.data.organizationId).eq("line_id", scope.data.lineId).order("last_message_at", { ascending: false, nullsFirst: false })
-      .order("id", { ascending: false }).limit(page.data.limit + 1);
-    if (cursor) query = query.or(`last_message_at.lt.${cursor.createdAt},and(last_message_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
-    const { data, error } = await query;
+    const { data, error } = await context.supabase.rpc("list_line_conversations", {
+      p_line_id: lineId.data,
+      p_limit: page.data.limit,
+      ...(cursor ? { p_cursor_at: cursor.createdAt, p_cursor_id: cursor.id } : {}),
+    });
     if (error) return reply.code(503).send({ code: "data_unavailable", message: "Les conversations ne sont pas disponibles.", requestId: request.id });
-    const conversations = data ?? [];
-    const hasMore = conversations.length > page.data.limit;
-    if (hasMore) conversations.pop();
-    const ids = conversations.map((conversation) => conversation.id);
-    let latestByConversation = new Map<string, { id: string; body: string; direction: string; status: string; created_at: string }>();
-    if (ids.length) {
-      const { data: messages, error: messageError } = await context.supabase.rpc("latest_conversation_messages", {
-        p_line_id: lineId.data,
-        p_conversation_ids: ids,
-      });
-      if (messageError) return reply.code(503).send({ code: "data_unavailable", message: "Les derniers messages ne sont pas disponibles.", requestId: request.id });
-      latestByConversation = new Map((messages ?? []).map((message) => [message.conversation_id, message]));
+    if (data === null) return reply.code(404).send({ code: "not_found", message: "Ligne introuvable.", requestId: request.id });
+    const result = inboxPageSchema.safeParse(data);
+    if (!result.success) {
+      request.log.error({ requestId: request.id }, "conversation list function returned an unexpected shape");
+      return reply.code(503).send({ code: "data_unavailable", message: "Les conversations ne sont pas disponibles.", requestId: request.id });
     }
-    let unreadByConversation = new Map<string, boolean>();
-    if (ids.length) {
-      const { data: unreadStatuses, error: unreadError } = await context.supabase.rpc("conversation_unread_status", {
-        p_line_id: lineId.data,
-        p_conversation_ids: ids,
-      });
-      if (unreadError) return reply.code(503).send({ code: "data_unavailable", message: "Les états de lecture ne sont pas disponibles.", requestId: request.id });
-      unreadByConversation = new Map((unreadStatuses ?? []).map((status) => [status.conversation_id, status.unread]));
-    }
-    let contactNames = new Map<string, string>();
-    if (conversations.length) {
-      try {
-        contactNames = await resolveUniqueContactNames(context.supabase, conversations[0]!.organization_id, conversations.map((conversation) => conversation.remote_number));
-      } catch {
-        request.log.warn({ requestId: request.id }, "conversation contact labels unavailable");
-      }
-    }
-    const items = conversations.map((conversation) => ({
-      id: conversation.id,
-      lineId: conversation.line_id,
-      remoteNumber: conversation.remote_number,
-      remoteContactName: contactNames.get(conversation.remote_number) ?? null,
-      lastMessageAt: conversation.last_message_at,
-      lastMessage: latestByConversation.get(conversation.id) ?? null,
-      unread: unreadByConversation.get(conversation.id) ?? false,
-    }));
-    const lastConversation = conversations[conversations.length - 1];
-    return { items, nextCursor: hasMore && lastConversation?.last_message_at ? encodeCursor({ last_message_at: lastConversation.last_message_at, id: lastConversation.id }) : null };
+    return inboxResponse(result.data);
   });
 
   routes.get<{ Params: { id: string }; Querystring: { limit?: string; cursor?: string } }>("/v1/conversations/:id/messages", async (request, reply) => {
@@ -972,29 +876,21 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     const page = paginationSchema.safeParse(request.query);
     if (!context) return reply.code(401).send({ code: "unauthorized", message: "Session requise.", requestId: request.id });
     if (!conversationId.success || !page.success) return reply.code(400).send({ code: "invalid_request", message: "Conversation ou pagination invalide.", requestId: request.id });
-    const cursor = decodeCursor(page.data.cursor);
+    const cursor = decodeCursor(page.data.cursor, { exact: true });
     if (cursor === false) return reply.code(400).send({ code: "invalid_request", message: "Curseur invalide.", requestId: request.id });
-    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
-    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
-    const organizationIds = organizationScope.data ?? [];
-    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
-    const { data: conversation, error: conversationError } = await context.supabase.from("conversations")
-      .select("id, organization_id, line_id, remote_number").in("organization_id", organizationIds).eq("id", conversationId.data).maybeSingle();
-    if (conversationError) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
-    if (!conversation) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
-    const lineScope = await findAssignedLine(context.supabase, context.userId, conversation.line_id, "can_sms");
-    if (lineScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
-    if (!lineScope.data || lineScope.data.organizationId !== conversation.organization_id) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
-    let query = context.supabase.from("messages").select("id, conversation_id, direction, body, status, provider_error_code, created_at, sent_at, delivered_at")
-      .eq("organization_id", conversation.organization_id).eq("conversation_id", conversation.id).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(page.data.limit + 1);
-    if (cursor) query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
-    const { data, error } = await query;
-    if (error) return reply.code(503).send({ code: "data_unavailable", message: "Les messages ne sont pas disponibles.", requestId: request.id });
-    const items = data ?? [];
-    const hasMore = items.length > page.data.limit;
-    if (hasMore) items.pop();
-    const nextCursor = hasMore && items.length ? encodeCursor(items[items.length - 1]!) : null;
-    return { conversation, items: items.reverse(), nextCursor };
+    const { data, error } = await context.supabase.rpc("conversation_thread", {
+      p_conversation_id: conversationId.data,
+      p_limit: page.data.limit,
+      ...(cursor ? { p_cursor_at: cursor.createdAt, p_cursor_id: cursor.id } : {}),
+    });
+    if (error) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
+    if (data === null) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
+    const result = threadPageSchema.safeParse(data);
+    if (!result.success) {
+      request.log.error({ requestId: request.id }, "conversation thread function returned an unexpected shape");
+      return reply.code(503).send({ code: "data_unavailable", message: "Les messages ne sont pas disponibles.", requestId: request.id });
+    }
+    return threadResponse(result.data);
   });
 
   routes.put<{ Params: { id: string }; Body: { lastReadMessageId?: string | null } }>("/v1/conversations/:id/read", async (request, reply) => {
@@ -1005,27 +901,18 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
     if (!conversationId.success || (lastReadMessageId !== null && !lastReadMessageId.success)) {
       return reply.code(400).send({ code: "invalid_request", message: "Conversation ou message invalide.", requestId: request.id });
     }
-    const organizationScope = await getActiveOrganizationIds(context.supabase, context.userId);
-    if (organizationScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "La conversation n'est pas disponible.", requestId: request.id });
-    const organizationIds = organizationScope.data ?? [];
-    if (!organizationIds.length) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
-    const { data: conversation } = await context.supabase.from("conversations").select("id, organization_id, line_id").in("organization_id", organizationIds).eq("id", conversationId.data).maybeSingle();
-    if (!conversation) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
-    const lineScope = await findAssignedLine(context.supabase, context.userId, conversation.line_id, "can_sms");
-    if (lineScope.unavailable) return reply.code(503).send({ code: "data_unavailable", message: "L'état de lecture n'a pas pu être enregistré.", requestId: request.id });
-    if (!lineScope.data || lineScope.data.organizationId !== conversation.organization_id) return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
-    const messageId = lastReadMessageId?.success ? lastReadMessageId.data : null;
-    if (messageId) {
-      const { data: message } = await context.supabase.from("messages").select("id").eq("organization_id", conversation.organization_id).eq("id", messageId).eq("conversation_id", conversation.id).maybeSingle();
-      if (!message) return reply.code(400).send({ code: "invalid_request", message: "Le message n'appartient pas à cette conversation.", requestId: request.id });
+    const { data, error } = await context.supabase.rpc("mark_conversation_read", {
+      p_conversation_id: conversationId.data,
+      ...(lastReadMessageId?.success ? { p_last_read_message_id: lastReadMessageId.data } : {}),
+    });
+    if (error) {
+      return error.code === "42501"
+        ? reply.code(403).send({ code: "read_state_not_updated", message: "L'état de lecture n'a pas pu être enregistré.", requestId: request.id })
+        : reply.code(503).send({ code: "data_unavailable", message: "L'état de lecture n'a pas pu être enregistré.", requestId: request.id });
     }
-    const { error } = await context.supabase.from("conversation_reads").upsert({
-      organization_id: conversation.organization_id,
-      conversation_id: conversation.id,
-      user_id: context.userId,
-      last_read_message_id: messageId,
-    }, { onConflict: "conversation_id,user_id" });
-    if (error) return reply.code(403).send({ code: "read_state_not_updated", message: "L'état de lecture n'a pas pu être enregistré.", requestId: request.id });
+    if (data === "not_found") return reply.code(404).send({ code: "not_found", message: "Conversation introuvable.", requestId: request.id });
+    if (data === "invalid_message") return reply.code(400).send({ code: "invalid_request", message: "Le message n'appartient pas à cette conversation.", requestId: request.id });
+    if (data !== "ok") return reply.code(503).send({ code: "data_unavailable", message: "L'état de lecture n'a pas pu être enregistré.", requestId: request.id });
     return reply.code(204).send();
   });
 

@@ -1132,6 +1132,10 @@ export type Database = {
         }
         Returns: Json
       }
+      assigned_line_scope: {
+        Args: { p_capability: string; p_line_id: string }
+        Returns: { line_id: string; organization_id: string }[]
+      }
       begin_inbound_call: {
         Args: {
           p_account_sid: string
@@ -1157,6 +1161,15 @@ export type Database = {
           p_call_sid: string
           p_intent_id: string
           p_voice_identity: string
+        }
+        Returns: Json
+      }
+      conversation_thread: {
+        Args: {
+          p_conversation_id: string
+          p_cursor_at?: string
+          p_cursor_id?: string
+          p_limit?: number
         }
         Returns: Json
       }
@@ -1207,6 +1220,24 @@ export type Database = {
           status: string
         }[]
       }
+      list_line_calls: {
+        Args: {
+          p_cursor_at?: string
+          p_cursor_id?: string
+          p_limit?: number
+          p_line_id: string
+        }
+        Returns: Json
+      }
+      list_line_conversations: {
+        Args: {
+          p_cursor_at?: string
+          p_cursor_id?: string
+          p_limit?: number
+          p_line_id: string
+        }
+        Returns: Json
+      }
       list_pending_outbound_messages: {
         Args: never
         Returns: {
@@ -1220,6 +1251,10 @@ export type Database = {
           organization_id: string
           status: string
         }[]
+      }
+      mark_conversation_read: {
+        Args: { p_conversation_id: string; p_last_read_message_id?: string }
+        Returns: string
       }
       prepare_outbound_message: {
         Args: {
@@ -1263,6 +1298,10 @@ export type Database = {
           p_user_id: string
         }
         Returns: string
+      }
+      unique_contact_names: {
+        Args: { p_numbers: string[]; p_organization_id: string }
+        Returns: { display_name: string; phone_number: string }[]
       }
       update_contact_with_phones: {
         Args: {

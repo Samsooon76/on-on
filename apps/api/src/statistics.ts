@@ -23,6 +23,33 @@ export async function readStatisticsPages<T extends { id: string }>(read: (after
   }
 }
 
+const DETAIL_CONCURRENCY = 6;
+
+/** Runs `run` on every item with at most `limit` in flight, keeping the input order. */
+async function mapConcurrently<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0, failed = false;
+  async function worker() {
+    while (!failed && next < items.length) {
+      const index = next++;
+      try { results[index] = await run(items[index]!); }
+      catch (error) { failed = true; throw error; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+function groupByCall<T extends { call_id: string }>(rows: T[]): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const group = groups.get(row.call_id);
+    if (group) group.push(row);
+    else groups.set(row.call_id, [row]);
+  }
+  return groups;
+}
+
 type CallRow = Pick<Database["public"]["Tables"]["calls"]["Row"], "id" | "line_id" | "remote_number" | "created_at" | "direction" | "status" | "result_code" | "ended_at" | "duration_seconds" | "ivr_state">;
 type Leg = { id: string; call_id: string; device_id: string | null; parent_call_sid: string | null; answered_at: string | null };
 export function statisticsCall(row: CallRow, legs: Leg[], deviceUsers: Map<string, string>, voicemails: { duration: number }[]): StatisticsCall {
@@ -59,23 +86,34 @@ export function registerStatisticsRoutes(app: FastifyInstance, service: Supabase
     const span = Date.parse(to) - Date.parse(from);
     if (span <= 0 || span > 186 * 86_400_000) problem("La période, comparaison comprise, est limitée à 186 jours.");
     const db = centerStore(service);
-    // The RPC rechecks both active organization and active administrator.
-    const admin = checked(await db.rpc("admin_snapshot", { p_org_id: orgId, p_actor_id: request.context.userId })) as unknown as AdminSnapshot;
     const fetchedAt = new Date().toISOString();
-    const rows = await readStatisticsPages(after => {
-      let query = db.from("calls").select("id,line_id,remote_number,created_at,direction,status,result_code,ended_at,duration_seconds,ivr_state")
-        .eq("organization_id", orgId).gte("created_at", from).lt("created_at", to).lte("created_at", fetchedAt).order("id").limit(500);
-      if (after) query = query.gt("id", after);
-      return query;
-    });
-    const queues = await readStatisticsPages(after => {
-      let query = db.from("voice_queues").select("id,config").eq("organization_id", orgId).order("id").limit(500);
-      if (after) query = query.gt("id", after);
-      return query;
-    });
-    const calls: StatisticsCall[] = [];
-    for (let offset = 0; offset < rows.length; offset += 100) {
-      const batch = rows.slice(offset, offset + 100), ids = batch.map(call => call.id);
+    // These reads do not depend on each other, so they run together. The RPC rechecks
+    // both active organization and active administrator before its result is used.
+    const [snapshot, rows, queues, deviceUsers] = await Promise.all([
+      db.rpc("admin_snapshot", { p_org_id: orgId, p_actor_id: request.context.userId }),
+      readStatisticsPages(after => {
+        let query = db.from("calls").select("id,line_id,remote_number,created_at,direction,status,result_code,ended_at,duration_seconds,ivr_state")
+          .eq("organization_id", orgId).gte("created_at", from).lt("created_at", to).lte("created_at", fetchedAt).order("id").limit(500);
+        if (after) query = query.gt("id", after);
+        return query;
+      }),
+      readStatisticsPages(after => {
+        let query = db.from("voice_queues").select("id,config").eq("organization_id", orgId).order("id").limit(500);
+        if (after) query = query.gt("id", after);
+        return query;
+      }),
+      // Every device of the organization at once, instead of a lookup per batch of calls.
+      readStatisticsPages(after => {
+        let query = db.from("devices").select("id,user_id").eq("organization_id", orgId).order("id").limit(500);
+        if (after) query = query.gt("id", after);
+        return query;
+      }).then(devices => new Map(devices.map(device => [device.id, device.user_id]))),
+    ]);
+    const admin = checked(snapshot) as unknown as AdminSnapshot;
+    // Legs and voicemails are fetched for 100 calls at a time, several batches at once.
+    const batches = Array.from({ length: Math.ceil(rows.length / 100) }, (_, index) => rows.slice(index * 100, index * 100 + 100));
+    const calls = (await mapConcurrently(batches, DETAIL_CONCURRENCY, async batch => {
+      const ids = batch.map(call => call.id);
       const [legs, voicemails] = await Promise.all([
         readStatisticsPages(after => {
           let query = db.from("call_legs").select("id,call_id,device_id,parent_call_sid,answered_at").eq("organization_id", orgId).in("call_id", ids).order("id").limit(500);
@@ -88,18 +126,9 @@ export function registerStatisticsRoutes(app: FastifyInstance, service: Supabase
           return query;
         }),
       ]);
-      const deviceIds = [...new Set(legs.flatMap(leg => leg.device_id ? [leg.device_id] : []))];
-      const deviceUsers = new Map<string, string>();
-      for (let i = 0; i < deviceIds.length; i += 100) {
-        const devices = await readStatisticsPages(after => {
-          let query = db.from("devices").select("id,user_id").eq("organization_id", orgId).in("id", deviceIds.slice(i, i + 100)).order("id").limit(500);
-          if (after) query = query.gt("id", after);
-          return query;
-        });
-        for (const device of devices) deviceUsers.set(device.id, device.user_id);
-      }
-      for (const row of batch) calls.push(statisticsCall(row, legs.filter(leg => leg.call_id === row.id), deviceUsers, voicemails.filter(message => message.call_id === row.id)));
-    }
+      const legsByCall = groupByCall(legs), voicemailsByCall = groupByCall(voicemails);
+      return batch.map(row => statisticsCall(row, legsByCall.get(row.id) ?? [], deviceUsers, voicemailsByCall.get(row.id) ?? []));
+    })).flat();
     return {
       fetchedAt, from, to, calls,
       users: admin.members.map(member => ({ id: member.user_id, name: member.display_name })),

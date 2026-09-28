@@ -32,7 +32,7 @@ try {
   }
   const results = [];
   const requestedTests = process.argv.slice(2);
-  const testFiles = requestedTests.length ? requestedTests : ['admin_and_ivr.test.sql', 'live_call_center.test.sql', 'mcp_integrations.test.sql', 'customer_webhooks.test.sql', 'call_transcriptions.test.sql', 'automatic_transcription.test.sql', 'call_tags.test.sql', 'call_followups.test.sql'];
+  const testFiles = requestedTests.length ? requestedTests : ['admin_and_ivr.test.sql', 'live_call_center.test.sql', 'mcp_integrations.test.sql', 'customer_webhooks.test.sql', 'call_transcriptions.test.sql', 'automatic_transcription.test.sql', 'call_tags.test.sql', 'call_followups.test.sql', 'conversation_loading.test.sql'];
   for (const file of testFiles) results.push(...await db.exec(await readFile(new URL('../supabase/tests/' + file, import.meta.url), 'utf8')));
   console.log(`${migrations.length} migrations applied to isolated PostgreSQL.`);
   for (const result of results) for (const row of result.rows) console.log(Object.values(row).join(' '));

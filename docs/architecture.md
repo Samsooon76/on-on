@@ -1,6 +1,6 @@
 # Architecture
 
-Le navigateur et les clients natifs appellent l'API Fastify au moyen de `packages/api-client`. Supabase Auth fournit les sessions. L'API vérifie chaque JWT avec Auth, puis réalise les requêtes métier avec le JWT utilisateur afin que Postgres applique les politiques RLS. Les clients ne reçoivent jamais une clé privilégiée.
+Le navigateur et les clients natifs appellent l'API Fastify au moyen de `packages/api-client`. Supabase Auth fournit les sessions. Les lectures (`GET`/`HEAD`) vérifient le JWT localement avec les clés de signature publiées par le projet (ES256, JWKS mis en cache dix minutes); toute requête qui modifie un état, un jeton symétrique historique ou une indisponibilité des clés passent par Supabase Auth ([décision 006](decisions/006-fewer-round-trips.md)). L'API réalise ensuite les requêtes métier avec le JWT utilisateur afin que Postgres applique les politiques RLS. Les clients ne reçoivent jamais une clé privilégiée.
 
 Les webhooks Twilio n'ont pas de JWT utilisateur. Leur vérification de signature précède toute écriture; leur persistance nécessite la clé serveur Supabase. Les tokens d'accès Voice sont produits côté serveur avec des identifiants API dédiés. L'audio reste entre le SDK et Twilio.
 

@@ -29,17 +29,25 @@ test('pagination continues after a short server page and rejects partial overflo
   await assert.rejects(readStatisticsPages(async () => ({ data: null, error: { code: 'XX000' } })), { statusCode: 503 });
 });
 function setup(t, overrides = {}) {
-  const state = { role: 'admin', reads: [], rpcError: null, tables: {}, ...overrides };
+  const state = { role: 'admin', reads: [], rpcError: null, tables: {}, latencyMs: 0, inFlight: 0, maxInFlight: 0, failTable: null, ...overrides };
   const config = loadConfig({ SUPABASE_URL: 'https://example.supabase.co', SUPABASE_PUBLISHABLE_KEY: 'test-publishable', SUPABASE_SECRET_KEY: 'test-secret' });
   const client = {
     auth: { getUser: async () => ({ data: { user: { id: actorId } }, error: null }) },
     from(table) {
-      const filters = []; let after = null; state.reads.push({ table, filters });
+      const filters = []; let after = null, inValues = null, inKey = null; state.reads.push({ table, filters });
       const query = { select: () => query, order: () => query, limit: () => query,
         eq: (key, value) => { filters.push([key, value]); return query; },
-        gt: (_key, value) => { after = value; return query; }, gte: () => query, lt: () => query, lte: () => query, in: () => query,
+        gt: (_key, value) => { after = value; return query; }, gte: () => query, lt: () => query, lte: () => query,
+        in: (key, values) => { inKey = key; inValues = values; return query; },
         maybeSingle: async () => ({ data: state.role ? { role: state.role } : null, error: null }),
-        then: (resolve, reject) => Promise.resolve({ data: (state.tables[table] ?? []).filter(row => !after || row.id > after), error: null }).then(resolve, reject),
+        then: (resolve, reject) => (async () => {
+          state.inFlight++; state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+          try {
+            if (state.latencyMs) await new Promise(done => setTimeout(done, state.latencyMs));
+            if (state.failTable === table) return { data: null, error: { code: 'XX000' } };
+            return { data: (state.tables[table] ?? []).filter(row => (!after || row.id > after) && (!inValues || inValues.includes(row[inKey]))), error: null };
+          } finally { state.inFlight--; }
+        })().then(resolve, reject),
       }; return query;
     },
     rpc: async (name, args) => { state.rpc = { name, args }; return { data: { users: [], members: [], lines: [] }, error: state.rpcError }; },
@@ -80,4 +88,35 @@ test('nonempty snapshots include related data without exposing provider or IVR c
   assert.deepEqual(snapshot.teams, [{ id: 'queue', name: 'Support', userIds: [actorId] }]);
   assert.ok(!response.body.includes('provider-sid')); assert.ok(!response.body.includes('ivr_state'));
   assert.ok(state.reads.every(read => read.filters.some(([key, value]) => key === 'organization_id' && value === orgId)));
+});
+
+function manyCalls(count) {
+  const id = index => `call-${String(index).padStart(5, '0')}`;
+  return {
+    calls: Array.from({ length: count }, (_, index) => ({ ...row, id: id(index), created_at: `2026-09-20T10:${String(index % 60).padStart(2, '0')}:00Z` })),
+    call_legs: Array.from({ length: count }, (_, index) => ({ id: `leg-${String(index).padStart(5, '0')}`, call_id: id(index), device_id: `device-${index % 3}`, parent_call_sid: 'provider-sid', answered_at: row.created_at })),
+    devices: [0, 1, 2].map(index => ({ id: `device-${index}`, user_id: `user-${index}` })),
+    voice_voicemails: [{ id: 'message', call_id: id(150), duration: 30 }],
+  };
+}
+test('large periods are read in concurrent batches, in order, with the devices fetched once', async t => {
+  const { app, state } = setup(t, { latencyMs: 4, tables: manyCalls(450) });
+  const response = await app.inject({ method: 'GET', url, headers });
+  assert.equal(response.statusCode, 200);
+  const { calls } = response.json();
+  assert.equal(calls.length, 450);
+  assert.deepEqual(calls.map(call => call.id), calls.map(call => call.id).slice().sort(), 'calls keep the order of the database pages');
+  assert.deepEqual(calls.map(call => call.userIds[0]), calls.map((_, index) => `user-${index % 3}`), 'each call is matched with its own legs and devices');
+  assert.equal(calls[150].voicemailCount, 1); assert.equal(calls[150].voicemailSeconds, 30);
+  assert.equal(calls.filter(call => call.voicemailCount).length, 1, 'voicemails are matched to their call only');
+  const reads = table => state.reads.filter(read => read.table === table).length;
+  assert.equal(reads('devices'), 2, 'one page of devices plus the terminating empty page, whatever the number of batches');
+  assert.equal(reads('call_legs'), 5 * 2, 'five batches of 100 calls, each read until an empty page');
+  assert.ok(state.maxInFlight > 2 && state.maxInFlight <= 3 + 6 * 2, `reads overlap but stay bounded (saw ${state.maxInFlight})`);
+});
+test('a failing batch fails the request without scheduling the remaining batches', async t => {
+  const { app, state } = setup(t, { latencyMs: 2, tables: manyCalls(1500), failTable: 'call_legs' });
+  const response = await app.inject({ method: 'GET', url, headers });
+  assert.equal(response.statusCode, 503);
+  assert.ok(state.reads.filter(read => read.table === 'call_legs').length <= 6, 'only the batches already in flight were started');
 });
