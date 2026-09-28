@@ -20,8 +20,8 @@
 
 | Mesure | Avant | Après, build local |
 |---|---:|---:|
-| JavaScript initial, hors SDK vocal différé | 989 194 octets transférés, sans compression | 184 770 octets Brotli, total des deux fichiers initiaux |
-| JavaScript initial non compressé | 989 194 octets | 805 646 octets |
+| JavaScript initial, hors SDK vocal différé | 989 194 octets transférés, sans compression | 184 951 octets Brotli, total des deux fichiers initiaux |
+| JavaScript initial non compressé | 989 194 octets | 806 204 octets |
 
 La baisse du transfert JavaScript initial est d’environ 81 %. Elle ne représente pas une baisse équivalente du temps de chargement complet : les polices, les styles, les requêtes authentifiées et le réseau interviennent aussi.
 
@@ -37,5 +37,6 @@ Deux sondes publiques ponctuelles ont donné environ 0,43 s pour le HTML web et 
 - Changement vers une ligne sans SMS : une lecture des lignes, une des appareils, une des appels ; aucune lecture SMS interdite. Ouverture des réglages différés vérifiée.
 - Reprise d’un SMS sur la seconde ligne : chargement direct de cette ligne, brouillon conservé, aucun chargement de l’historique de la première ligne.
 - Échec HTTP 503 de la récupération des SMS : autres données chargées, avertissement et action de reprise conservés.
+- Échec du téléchargement du module de réglages : erreur contenue dans la rubrique, application toujours montée et navigation vers les contacts fonctionnelle.
 
 Les contrôles ont tourné avec le Node 26 disponible dans l’environnement, qui signale une différence avec le Node 24 déclaré par le projet. Les essais navigateur utilisent des données simulées ; aucun appel ni SMS réel n’a été émis. Les changements ne sont pas déployés par cette intervention et la nouvelle version native n’a pas été installée sur téléphone.
