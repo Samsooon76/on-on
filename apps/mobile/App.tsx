@@ -2,7 +2,7 @@ import { useFonts } from "expo-font";
 import { AmbientBackground } from "./src/theme";
 import { createClient, type Session } from "@supabase/supabase-js";
 import mobilePackage from "./package.json";
-import { ApiClientError, buildInbox, createApiClient, getSmsSegmentInfo, phoneKey, type ApiPage, type CallRecord, type Contact, type Conversation, type InboxConversation } from "@onoff/api-client";
+import { ApiClientError, buildInbox, createApiClient, createSnapshot, getSmsSegmentInfo, phoneKey, type ApiPage, type CallRecord, type Contact, type Conversation, type InboxConversation } from "@onoff/api-client";
 import { createNativeVoiceClient, type NativeAudioRoute, type NativeVoiceClient } from "@onoff/voice-native";
 import * as SecureStore from "expo-secure-store";
 import * as Linking from "expo-linking";
@@ -17,6 +17,7 @@ import { ConversationInbox, ConversationThread } from "./src/Conversations";
 import { mergeRecords } from "./src/conversation-model";
 import { loadLineHistory } from "./src/line-history";
 import { useConversationHistory } from "./src/useConversationHistory";
+import { clearSnapshot, loadSnapshot, saveSnapshot, snapshotSignature } from "./src/workspace-snapshot";
 import { callStatusLabel, getPhoneCountry, isDialableNumber, isMissedCall, normalizePhone, phoneCountries, relativeCallDate } from "./src/phone";
 import { ActionButton, Card, Empty, Icon, IconButton, MotionPreferences, Pill, SearchField, SectionTitle, Sheet, Touch, feedback, palette, styles, type IconName } from "./src/ui";
 import {
@@ -71,6 +72,12 @@ function actionKey(): string {
 
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : "Une erreur inattendue est survenue.";
+}
+
+// Work that runs alongside something else: its failure is kept and reported when the caller is ready for it,
+// so an error that comes early is never an unhandled rejection.
+function settle(work: Promise<unknown>): Promise<{ error: unknown } | null> {
+  return work.then(() => null, (error: unknown) => ({ error }));
 }
 
 export default function App() {
@@ -137,6 +144,8 @@ function MobileApp() {
   const [callFilter, setCallFilter] = useState<"all" | "missed">("all");
   const [refreshing, setRefreshing] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  // The inbox on screen comes from the device snapshot: the server has not confirmed it yet.
+  const [showingSnapshot, setShowingSnapshot] = useState(false);
   const [contactsLoading, setContactsLoading] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const contactSearchRef = useRef(contactSearch);
@@ -173,12 +182,21 @@ function MobileApp() {
   const markConversationRead = useCallback((id: string) => {
     setConversations((current) => current.map((conversation) => conversation.id === id ? { ...conversation, unread: false } : conversation));
   }, []);
-  const history = useConversationHistory(api, selectedLineId, selectedConversationId, activeTab === "conversations" && messageComposerVisible, markConversationRead);
+  const history = useConversationHistory(api, selectedLineId, selectedConversationId, activeTab === "conversations" && messageComposerVisible, markConversationRead, session?.user.id);
   const historyRefreshRef = useRef(history.refresh);
   historyRefreshRef.current = history.refresh;
   const workspaceRequestRef = useRef(0);
   const workspaceSelection = useRef({ organizationId: "", lineId: "" });
   const loadedLineRef = useRef("");
+  // The workspace request that finished without error: a single list may be refreshed alone only after that.
+  const settledRequestRef = useRef(-1);
+  // Last contacts list requested for an organization and search, so the search effect doesn't fetch it again.
+  const contactsRequestRef = useRef({ organizationId: "", query: "", startedAt: 0 });
+  // The server's organizations were received: the snapshot must not replace anything fresher.
+  const serverStateRef = useRef(false);
+  const savedSnapshotRef = useRef("");
+  const inboxAccessRef = useRef({ canSms: false, canVoice: false });
+  inboxAccessRef.current = { canSms: Boolean(activeAssignment?.can_sms), canVoice: Boolean(activeAssignment?.can_voice) };
   const reportVoiceDiagnostic = useCallback(async (event: VoiceDiagnosticEvent, durationMs?: number): Promise<void> => {
     try {
       await api("/v1/diagnostics/voice", {
@@ -193,20 +211,29 @@ function MobileApp() {
   const refreshWorkspace = useCallback(async (orgId: string, preferredLineId?: string) => {
     if (!orgId) return;
     const request = ++workspaceRequestRef.current;
-    workspaceSelection.current = { organizationId: orgId, lineId: selectedLineId };
     const context = { ...workspaceContextRef.current };
-    const isCurrent = () => request === workspaceRequestRef.current && orgId === workspaceContextRef.current.organizationId && context.lineId === workspaceContextRef.current.lineId;
+    workspaceSelection.current = { organizationId: orgId, lineId: context.lineId };
+    const isCurrent = () => request === workspaceRequestRef.current && orgId === workspaceContextRef.current.organizationId;
     const query = contactSearchRef.current;
-    const [lineResponse, contactResponse, deviceResponse] = await Promise.all([
-      api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`),
-      api<{ items: Contact[] }>(`/v1/organizations/${orgId}/contacts?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}`),
-      api<{ items: DeviceRecord[] }>("/v1/devices"),
-    ]);
-    if (!isCurrent()) return;
+    const contactsPath = `/v1/organizations/${orgId}/contacts?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}`;
+    contactsRequestRef.current = { organizationId: orgId, query, startedAt: Date.now() };
+    const lineRequest = api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`);
+    // Contacts and devices are applied when they arrive and never delay the inbox.
+    const contactsOutcome = settle(api<{ items: Contact[] }>(contactsPath)
+      .then(({ items }) => { if (isCurrent() && query === contactSearchRef.current) setContacts(items); }));
+    const devicesOutcome = settle(api<{ items: DeviceRecord[] }>("/v1/devices")
+      .then(({ items }) => { if (isCurrent()) setDevices(items); }));
+    // Resolves once everything has settled, and fails if any required request failed.
+    const finish = async (outcomes: ReturnType<typeof settle>[]) => {
+      const failure = (await Promise.all(outcomes)).find(Boolean);
+      if (failure) throw failure.error;
+      if (request === workspaceRequestRef.current) settledRequestRef.current = request;
+    };
+    const lineResponse = await lineRequest;
+    if (!isCurrent() || context.lineId !== workspaceContextRef.current.lineId) return;
     setLines(lineResponse.items);
-    if (query === contactSearchRef.current) setContacts(contactResponse.items);
-    setDevices(deviceResponse.items);
-    const target = lineResponse.items.find((item) => item.lines?.id === (preferredLineId ?? selectedLineId))
+    setShowingSnapshot(false);
+    const target = lineResponse.items.find((item) => item.lines?.id === (preferredLineId ?? context.lineId))
       ?? lineResponse.items.find((item) => item.lines);
     const targetLineId = target?.lines?.id ?? "";
     if (targetLineId !== context.lineId) {
@@ -227,19 +254,32 @@ function MobileApp() {
       setConversations([]);
       setSelectedConversationId("");
       setMessageComposerVisible(false);
+      await finish([contactsOutcome, devicesOutcome]);
       return;
     }
-    const { calls: callResponse, conversations: conversationResponse } = await loadLineHistory(api, targetLineId, target);
-    if (request !== workspaceRequestRef.current || orgId !== workspaceContextRef.current.organizationId || (workspaceContextRef.current.lineId && targetLineId !== workspaceContextRef.current.lineId)) return;
     const sameLine = loadedLineRef.current === targetLineId;
-    loadedLineRef.current = targetLineId;
-    setCalls((current) => sameLine && target.can_voice ? mergeRecords(current, callResponse.items) : callResponse.items);
-    setConversations((current) => sameLine && target.can_sms ? mergeRecords(current, conversationResponse.items) : conversationResponse.items);
-    setInboxCursors((current) => ({
-      calls: target.can_voice ? (sameLine ? current.calls : callResponse.nextCursor) : null,
-      conversations: target.can_sms ? (sameLine ? current.conversations : conversationResponse.nextCursor) : null,
+    // The selection above only reaches workspaceContextRef once React renders, which an empty page can beat.
+    const isTargetCurrent = () => isCurrent() && [context.lineId, targetLineId, ""].includes(workspaceContextRef.current.lineId);
+    // Each list is applied as soon as its page arrives. The line counts as loaded once both were applied, so a
+    // request interrupted between the two never leaves a half-loaded line that the next refresh would merge into.
+    let applied = 0;
+    const markApplied = () => { if (++applied === 2) loadedLineRef.current = targetLineId; };
+    const historyOutcome = settle(loadLineHistory(api, targetLineId, target, {
+      onConversations: (page) => {
+        if (!isTargetCurrent()) return;
+        setConversations((current) => sameLine && target.can_sms ? mergeRecords(current, page.items) : page.items);
+        setInboxCursors((current) => ({ ...current, conversations: target.can_sms ? (sameLine ? current.conversations : page.nextCursor) : null }));
+        markApplied();
+      },
+      onCalls: (page) => {
+        if (!isTargetCurrent()) return;
+        setCalls((current) => sameLine && target.can_voice ? mergeRecords(current, page.items) : page.items);
+        setInboxCursors((current) => ({ ...current, calls: target.can_voice ? (sameLine ? current.calls : page.nextCursor) : null }));
+        markApplied();
+      },
     }));
-  }, [api, selectedLineId]);
+    await finish([contactsOutcome, devicesOutcome, historyOutcome]);
+  }, [api]);
 
   async function restorePendingSmsAttempt(isCurrent: () => boolean = () => true, prefetched?: PendingSms[]): Promise<void> {
     const items = prefetched ?? (await api<{ items: PendingSms[] }>("/v1/messages/pending")).items;
@@ -312,6 +352,11 @@ function MobileApp() {
       setSession(nextSession);
       if (event === "PASSWORD_RECOVERY") setRecoveringPassword(true);
       if (previousUserId && previousUserId !== nextSession?.user.id) {
+        // Phone numbers and message previews of the previous user must not stay on the device.
+        void clearSnapshot(previousUserId);
+        serverStateRef.current = false;
+        savedSnapshotRef.current = "";
+        setShowingSnapshot(false);
         loadedLineRef.current = "";
         workspaceRequestRef.current += 1;
         setInboxCursors({ calls: null, conversations: null });
@@ -453,13 +498,28 @@ function MobileApp() {
       ]);
       if (cancelled) return;
       setOrganizations(items);
-      const next = selectedOrg && items.some((item) => item.organization_id === selectedOrg)
-        ? selectedOrg
+      serverStateRef.current = true;
+      // The organization on screen may come from the snapshot, which this closure predates.
+      const shown = workspaceContextRef.current.organizationId;
+      const next = shown && items.some((item) => item.organization_id === shown)
+        ? shown
         : items[0]?.organization_id ?? "";
       if (pending.items.length) await restorePendingSmsAttempt(() => !cancelled, pending.items);
       else {
         setSelectedOrg(next);
+        // Nothing uncertain to recover: conversations are usable while the history finishes loading.
+        if (pending.ok) setSmsRecoveryState("ready");
         if (next) await refreshWorkspace(next);
+        else {
+          // No organization left: nothing of the snapshot may stay on screen.
+          loadedLineRef.current = "";
+          setShowingSnapshot(false);
+          setLines([]);
+          setSelectedLineId("");
+          setCalls([]);
+          setConversations([]);
+          setInboxCursors({ calls: null, conversations: null });
+        }
       }
       if (!pending.ok) throw pending.error;
       if (!cancelled) setSmsRecoveryState("ready");
@@ -484,6 +544,40 @@ function MobileApp() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrg, selectedLineId]);
 
+  // Cold start: show this user's last known inbox before anything is fetched. It only fills empty state and starts
+  // no request by itself (the effects that fetch wait for `showingSnapshot`): the normal load then replaces it.
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId) return;
+    let cancelled = false;
+    void loadSnapshot<Organization, LineAssignment>(userId).then((snapshot) => {
+      if (cancelled || !snapshot || serverStateRef.current || workspaceContextRef.current.organizationId) return;
+      workspaceSelection.current = { organizationId: snapshot.organizationId, lineId: snapshot.lineId };
+      setOrganizations(snapshot.organizations);
+      setSelectedOrg(snapshot.organizationId);
+      setLines(snapshot.lines);
+      setSelectedLineId(snapshot.lineId);
+      setConversations(snapshot.conversations);
+      setCalls(snapshot.calls);
+      setShowingSnapshot(true);
+    });
+    return () => { cancelled = true; };
+  }, [session?.user.id]);
+
+  // Remember the loaded inbox for the next cold start; identical content is not written again.
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!authToken || !userId || workspaceLoading || showingSnapshot || !selectedOrg || !selectedLineId || !lines.length || loadedLineRef.current !== selectedLineId) return;
+    const timer = setTimeout(() => {
+      if (registeredUserRef.current !== userId) return;
+      const snapshot = createSnapshot({ userId, organizationId: selectedOrg, lineId: selectedLineId, organizations, lines, conversations, calls });
+      const signature = snapshotSignature(snapshot);
+      if (signature === savedSnapshotRef.current) return;
+      void saveSnapshot(snapshot).then((saved) => { if (saved && registeredUserRef.current === userId) savedSnapshotRef.current = signature; });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [authToken, session?.user.id, workspaceLoading, showingSnapshot, selectedOrg, selectedLineId, organizations, lines, conversations, calls]);
+
   useEffect(() => {
     if (messageComposerVisible && selectedThread?.smsConversationId && !selectedConversationId) {
       setSelectedConversationId(selectedThread.smsConversationId);
@@ -491,17 +585,25 @@ function MobileApp() {
   }, [messageComposerVisible, selectedThread?.smsConversationId, selectedConversationId]);
 
   useEffect(() => {
-    if (!authToken || !selectedOrg) return;
+    if (!authToken || !selectedOrg || showingSnapshot) return;
+    // The workspace load fetches the contacts too: don't request the same list again right after it.
+    const requestedRecently = () => {
+      const last = contactsRequestRef.current;
+      return last.organizationId === selectedOrg && last.query === contactSearch && Date.now() - last.startedAt < 3000;
+    };
+    if (requestedRecently()) { setContactsLoading(false); return; }
     const controller = new AbortController();
     setContactsLoading(true);
     const timer = setTimeout(() => {
+      if (requestedRecently()) { setContactsLoading(false); return; }
+      contactsRequestRef.current = { organizationId: selectedOrg, query: contactSearch, startedAt: Date.now() };
       void api<{ items: Contact[] }>(`/v1/organizations/${selectedOrg}/contacts?limit=50${contactSearch ? `&q=${encodeURIComponent(contactSearch)}` : ""}`, { signal: controller.signal })
         .then(({ items }) => { if (!controller.signal.aborted) setContacts(items); })
         .catch((error: unknown) => { if (!controller.signal.aborted) setNotice(friendlyError(error)); })
         .finally(() => { if (!controller.signal.aborted) setContactsLoading(false); });
     }, 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [api, authToken, selectedOrg, contactSearch]);
+  }, [api, authToken, selectedOrg, contactSearch, showingSnapshot]);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
@@ -517,11 +619,39 @@ function MobileApp() {
     if (!authToken || !selectedOrg || !selectedLineId || !supabase) return;
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const refresh = () => {
-      if (cancelled || refreshTimer) return;
+    const reportError = (error: unknown) => { if (!cancelled) setNotice(friendlyError(error)); };
+    // Events within the delay share one refresh that covers what each of them asked for.
+    const wanted = { everything: false, conversations: false, calls: false };
+    // Only the newest first-page answer of a list is applied: an older one must not undo it.
+    const latest = { conversations: 0, calls: 0 };
+    const refresh = (need: Partial<typeof wanted>) => {
+      if (cancelled) return;
+      Object.assign(wanted, need);
+      if (refreshTimer) return;
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        void refreshWorkspace(selectedOrg, selectedLineId).then(() => { if (!cancelled) return historyRefreshRef.current(); }).catch((error: unknown) => setNotice(friendlyError(error)));
+        const { canSms, canVoice } = inboxAccessRef.current;
+        const conversations = wanted.conversations && canSms;
+        const calls = wanted.calls && canVoice;
+        // A list refreshed alone needs the line completely loaded and no load running (that load could bring older
+        // pages than this one); otherwise the whole workspace is refreshed, as for every event before.
+        const settled = loadedLineRef.current === selectedLineId && settledRequestRef.current === workspaceRequestRef.current;
+        const everything = wanted.everything || ((conversations || calls) && !settled);
+        wanted.everything = wanted.conversations = wanted.calls = false;
+        const work: Promise<unknown>[] = [];
+        if (everything) work.push(refreshWorkspace(selectedOrg, selectedLineId));
+        else if (conversations || calls) {
+          const request = workspaceRequestRef.current;
+          const sequence = { conversations: conversations ? ++latest.conversations : 0, calls: calls ? ++latest.calls : 0 };
+          const accepts = (list: keyof typeof latest) => !cancelled && sequence[list] === latest[list] && request === workspaceRequestRef.current
+            && workspaceContextRef.current.organizationId === selectedOrg && workspaceContextRef.current.lineId === selectedLineId;
+          work.push(loadLineHistory(api, selectedLineId, { can_sms: conversations, can_voice: calls }, {
+            onConversations: conversations ? (page) => { if (accepts("conversations")) setConversations((current) => mergeRecords(current, page.items)); } : undefined,
+            onCalls: calls ? (page) => { if (accepts("calls")) setCalls((current) => mergeRecords(current, page.items)); } : undefined,
+          }));
+        }
+        if (everything || conversations) work.push(historyRefreshRef.current());
+        void Promise.all(work).catch(reportError);
       }, 150);
     };
     const refreshFromEvent = (payload: unknown) => {
@@ -529,7 +659,6 @@ function MobileApp() {
       const event = (payload as { payload?: unknown }).payload ?? payload;
       if (!event || typeof event !== "object") return;
       const kind = (event as { kind?: unknown }).kind;
-      const reportError = (error: unknown) => { if (!cancelled) setNotice(friendlyError(error)); };
       if (kind === "contact") {
         const query = contactSearchRef.current;
         void api<{ items: Contact[] }>(`/v1/organizations/${selectedOrg}/contacts?limit=50${query ? `&q=${encodeURIComponent(query)}` : ""}`)
@@ -537,8 +666,10 @@ function MobileApp() {
       } else if (kind === "device") {
         void api<{ items: DeviceRecord[] }>("/v1/devices")
           .then(({ items }) => { if (!cancelled) setDevices(items); }).catch(reportError);
-      } else if (kind === "call" || kind === "message") {
-        refresh();
+      } else if (kind === "call") {
+        refresh({ calls: true });
+      } else if (kind === "message") {
+        refresh({ conversations: true });
       }
     };
     void supabase.realtime.setAuth(authToken);
@@ -551,11 +682,11 @@ function MobileApp() {
     for (const channel of channels) {
       let subscribedBefore = false;
       channel.on("broadcast", { event: "onoff.activity" }, refreshFromEvent).subscribe((status) => {
-        if (status === "SUBSCRIBED" && subscribedBefore) refresh();
+        if (status === "SUBSCRIBED" && subscribedBefore) refresh({ everything: true });
         if (status === "SUBSCRIBED") subscribedBefore = true;
       });
     }
-    const appState = AppState.addEventListener("change", (state) => { if (state === "active") refresh(); });
+    const appState = AppState.addEventListener("change", (state) => { if (state === "active") refresh({ everything: true }); });
     return () => {
       cancelled = true;
       if (refreshTimer) clearTimeout(refreshTimer);
@@ -566,6 +697,8 @@ function MobileApp() {
   }, [authToken, selectedOrg, selectedLineId]);
 
   useEffect(() => {
+    // Permissions from the snapshot are not proof of access: the device registers once the server confirmed the line.
+    if (showingSnapshot) return;
     if (!authToken || !selectedOrg || !activeLine?.id || activeLine.organization_id !== selectedOrg || !activeAssignment?.can_voice || !activeLine.voice_enabled) {
       setCanReceiveNativeCalls(false);
       if (voiceRegistrationRef.current) {
@@ -629,7 +762,7 @@ function MobileApp() {
       if (!cancelled) setVoiceStatus(friendlyError(error));
     });
     return () => { cancelled = true; };
-  }, [activeAssignment?.can_voice, activeLine?.id, activeLine?.organization_id, activeLine?.voice_enabled, api, authToken, markVoiceState, selectedOrg, session?.user.id]);
+  }, [activeAssignment?.can_voice, activeLine?.id, activeLine?.organization_id, activeLine?.voice_enabled, api, authToken, markVoiceState, selectedOrg, session?.user.id, showingSnapshot]);
 
   useEffect(() => {
     if (!authToken || !activeLine?.id || !activeAssignment?.can_voice || !canReceiveNativeCalls) return;

@@ -4,15 +4,27 @@ import { AppState } from "react-native";
 import { mergeRecords } from "./conversation-model.ts";
 
 type History = { key: string; messages: MessageRecord[]; cursor: string | null; state: "loading" | "ready" | "error"; loadingOlder: boolean };
+type CachedThread = { messages: MessageRecord[]; cursor: string | null };
 type Request = <T>(path: string, init?: RequestInit) => Promise<T>;
 
-export function useConversationHistory(api: Request, lineId: string, conversationId: string, visible: boolean, onRead: (id: string) => void) {
+const cachedThreadLimit = 20;
+
+// A thread opened before starts from its remembered messages instead of a spinner; the fresh ones merge in.
+function openedHistory(threads: Map<string, CachedThread>, key: string): History {
+  const cached = key ? threads.get(key) : undefined;
+  return { key, messages: cached?.messages ?? [], cursor: cached?.cursor ?? null, state: key && !cached ? "loading" : "ready", loadingOlder: false };
+}
+
+export function useConversationHistory(api: Request, lineId: string, conversationId: string, visible: boolean, onRead: (id: string) => void, userId = "") {
   const key = visible && conversationId ? `${lineId}:${conversationId}` : "";
   const scope = useRef({ key, generation: 0, latestRequest: 0 });
   if (scope.current.key !== key) scope.current = { key, generation: scope.current.generation + 1, latestRequest: 0 };
+  // Most recently used threads only, and never shared with another signed-in user.
+  const cache = useRef({ userId, threads: new Map<string, CachedThread>() });
+  if (cache.current.userId !== userId) cache.current = { userId, threads: new Map() };
   const [history, setHistory] = useState<History>({ key: "", messages: [], cursor: null, state: "ready", loadingOlder: false });
   const olderRequest = useRef(false);
-  const current = history.key === key ? history : { key, messages: [], cursor: null, state: key ? "loading" as const : "ready" as const, loadingOlder: false };
+  const current = history.key === key ? history : openedHistory(cache.current.threads, key);
 
   const refresh = useCallback(async () => {
     if (!key || scope.current.key !== key) return;
@@ -38,10 +50,19 @@ export function useConversationHistory(api: Request, lineId: string, conversatio
 
   useEffect(() => {
     olderRequest.current = false;
-    setHistory({ key, messages: [], cursor: null, state: key ? "loading" : "ready", loadingOlder: false });
+    setHistory(openedHistory(cache.current.threads, key));
     void refresh();
     return () => { scope.current.generation += 1; };
   }, [key, refresh]);
+
+  // Remember what is shown, once it is known to belong to the open thread.
+  useEffect(() => {
+    if (!history.key || history.key !== scope.current.key || !history.messages.length) return;
+    const { threads } = cache.current;
+    threads.delete(history.key);
+    threads.set(history.key, { messages: history.messages, cursor: history.cursor });
+    while (threads.size > cachedThreadLimit) threads.delete(threads.keys().next().value!);
+  }, [history]);
 
   const loadOlder = async () => {
     if (!key || !current.cursor || olderRequest.current) return;

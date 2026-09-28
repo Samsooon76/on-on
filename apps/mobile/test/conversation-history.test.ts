@@ -102,3 +102,110 @@ test('call-only threads never request a fabricated SMS conversation', async () =
   assert.deepEqual(history!.messages, []);
   await act(async () => root.unmount());
 });
+
+const noRead = () => {};
+// A thread backed by a network that answers only when the test says so.
+function heldThreads() {
+  const pending = new Map<string, ReturnType<typeof deferred>>();
+  const reads: string[] = [];
+  const api = (path: string) => {
+    if (path.endsWith('/read')) { reads.push(path); return Promise.resolve(null); }
+    const request = deferred(); pending.set(path, request); return request.promise;
+  };
+  const answer = (id: string, result: unknown) => pending.get(`/v1/conversations/${id}/messages?limit=50`)!.resolve(result);
+  return { api, answer, reads };
+}
+
+test('a reopened thread shows its cached messages at once, merges the fresh ones and keeps them when the refresh fails', async () => {
+  const { api, answer } = heldThreads();
+  let failing = false;
+  const request = ((path: string, init?: RequestInit) => failing ? Promise.reject(new Error('offline')) : api(path)) as Parameters<typeof useConversationHistory>[0];
+  let history: ReturnType<typeof useConversationHistory>;
+  const Probe = ({ id }: { id: string }) => { history = useConversationHistory(request, 'line', id, true, noRead); return null; };
+  let root: ReturnType<typeof create>;
+  await act(async () => { root = create(createElement(Probe, { id: 'a' })); });
+  await act(async () => answer('a', page('a1', 'older-a')));
+  await act(async () => { root.update(createElement(Probe, { id: 'b' })); });
+  assert.equal(history!.state, 'loading');
+  assert.deepEqual(history!.messages, []);
+  await act(async () => answer('b', page('b1')));
+  await act(async () => { root.update(createElement(Probe, { id: 'a' })); });
+  assert.deepEqual(history!.messages.map((item) => item.id), ['a1']);
+  assert.equal(history!.state, 'ready');
+  await act(async () => answer('a', { items: [message('a1', 'delivered'), message('a2')], nextCursor: 'ignored' }));
+  assert.deepEqual(history!.messages.map((item) => item.id), ['a1', 'a2']);
+  assert.equal(history!.messages[0]!.status, 'delivered');
+  assert.equal(history!.hasOlder, true);
+  failing = true;
+  await act(async () => history!.refresh());
+  assert.equal(history!.state, 'error');
+  assert.deepEqual(history!.messages.map((item) => item.id), ['a1', 'a2']);
+  await act(async () => root.unmount());
+});
+
+test('a late answer for another conversation is still ignored when the open thread comes from the cache', async () => {
+  const { api, answer, reads } = heldThreads();
+  let history: ReturnType<typeof useConversationHistory>;
+  const Probe = ({ id }: { id: string }) => { history = useConversationHistory(api, 'line', id, true, noRead); return null; };
+  let root: ReturnType<typeof create>;
+  await act(async () => { root = create(createElement(Probe, { id: 'a' })); });
+  await act(async () => answer('a', page('a1')));
+  await act(async () => { root.update(createElement(Probe, { id: 'b' })); });
+  await act(async () => answer('b', page('b1')));
+  await act(async () => { root.update(createElement(Probe, { id: 'a' })); });
+  await act(async () => { root.update(createElement(Probe, { id: 'b' })); });
+  assert.deepEqual(history!.messages.map((item) => item.id), ['b1']);
+  const readsBefore = reads.length;
+  await act(async () => answer('a', page('a-late')));
+  assert.deepEqual(history!.messages.map((item) => item.id), ['b1']);
+  assert.equal(reads.length, readsBefore);
+  await act(async () => answer('b', { items: [message('b2')], nextCursor: null }));
+  assert.deepEqual(history!.messages.map((item) => item.id), ['b1', 'b2']);
+  await act(async () => root.unmount());
+});
+
+test('only the 20 most recently used threads are remembered', async () => {
+  let held: ReturnType<typeof deferred> | null = null;
+  const api = async (path: string) => {
+    if (path.endsWith('/read')) return null;
+    if (held) return held.promise;
+    return page(`${path.split('/')[3]}-message`);
+  };
+  let history: ReturnType<typeof useConversationHistory>;
+  const Probe = ({ id }: { id: string }) => { history = useConversationHistory(api, 'line', id, true, noRead); return null; };
+  const open = (id: string) => act(async () => { root.update(createElement(Probe, { id })); });
+  let root: ReturnType<typeof create>;
+  await act(async () => { root = create(createElement(Probe, { id: 'c1' })); });
+  for (let index = 2; index <= 20; index += 1) await open(`c${index}`);
+  await open('c1');
+  await open('c21');
+  held = deferred();
+  await open('c2');
+  assert.equal(history!.state, 'loading');
+  assert.deepEqual(history!.messages, []);
+  await open('c1');
+  assert.equal(history!.state, 'ready');
+  assert.deepEqual(history!.messages.map((item) => item.id), ['c1-message']);
+  await open('c21');
+  assert.deepEqual(history!.messages.map((item) => item.id), ['c21-message']);
+  held.resolve(page('late'));
+  await act(async () => root.unmount());
+});
+
+test('the cache is dropped when the signed-in user changes', async () => {
+  const { api, answer } = heldThreads();
+  let history: ReturnType<typeof useConversationHistory>;
+  const Probe = ({ user, visible }: { user: string; visible: boolean }) => { history = useConversationHistory(api, 'line', 'a', visible, noRead, user); return null; };
+  let root: ReturnType<typeof create>;
+  await act(async () => { root = create(createElement(Probe, { user: 'u1', visible: true })); });
+  await act(async () => answer('a', page('a1')));
+  await act(async () => { root.update(createElement(Probe, { user: 'u1', visible: false })); });
+  await act(async () => { root.update(createElement(Probe, { user: 'u1', visible: true })); });
+  assert.deepEqual(history!.messages.map((item) => item.id), ['a1']);
+  await act(async () => { root.update(createElement(Probe, { user: 'u1', visible: false })); });
+  await act(async () => { root.update(createElement(Probe, { user: 'u2', visible: false })); });
+  await act(async () => { root.update(createElement(Probe, { user: 'u2', visible: true })); });
+  assert.equal(history!.state, 'loading');
+  assert.deepEqual(history!.messages, []);
+  await act(async () => root.unmount());
+});

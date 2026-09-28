@@ -54,3 +54,31 @@ test('failures for an authorized history are still reported', async () => {
   const api = async <T>(): Promise<T> => { throw new Error('Ligne introuvable.'); };
   await assert.rejects(loadLineHistory(api, 'line', { can_voice: true, can_sms: false }), /Ligne introuvable/);
 });
+
+test('each list is reported as soon as its page arrives, without waiting for the other one', async () => {
+  const requests = new Map<string, (page: unknown) => void>();
+  const api = <T>(path: string): Promise<T> => new Promise((resolve) => requests.set(path, resolve as (page: unknown) => void));
+  const seen: string[] = [];
+  const loading = loadLineHistory(api, 'line', { can_voice: true, can_sms: true }, {
+    onConversations: (page) => seen.push(`conversations:${page.items[0]!.id}`),
+    onCalls: (page) => seen.push(`calls:${page.items[0]!.id}`),
+  });
+  requests.get('/v1/lines/line/conversations?limit=50')!(conversationPage);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen, ['conversations:sms-1']);
+  requests.get('/v1/lines/line/calls?limit=50')!(callPage);
+  assert.deepEqual(await loading, { calls: callPage, conversations: conversationPage });
+  assert.deepEqual(seen, ['conversations:sms-1', 'calls:call-1']);
+});
+
+test('a list without permission is reported empty without a request, and a failing list rejects after the other was reported', async () => {
+  const reported: unknown[] = [];
+  await loadLineHistory(async () => assert.fail('history is not authorized'), 'line', { can_voice: false, can_sms: false }, {
+    onConversations: (page) => reported.push(page), onCalls: (page) => reported.push(page),
+  });
+  assert.deepEqual(reported, [emptyPage, emptyPage]);
+  const api = async <T>(path: string): Promise<T> => { if (path.includes('/calls?')) throw new Error('Ligne introuvable.'); return conversationPage as T; };
+  const seen: string[] = [];
+  await assert.rejects(loadLineHistory(api, 'line', { can_voice: true, can_sms: true }, { onConversations: () => seen.push('conversations'), onCalls: () => seen.push('calls') }), /Ligne introuvable/);
+  assert.deepEqual(seen, ['conversations']);
+});
