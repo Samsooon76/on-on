@@ -129,7 +129,7 @@ export function Conversations(props: Props) {
           </form>
           <p className="composer-note">{props.canSms ? `Envoyé depuis le ${formatPhone(props.lineNumber)}` : props.smsUnavailable}</p>
         </div>
-      </> : <div className="thread-welcome"><div className="welcome-symbol"><ChatCircle size={40} weight="thin" /></div><h2>Choisissez une conversation.</h2><p>Retrouvez les messages et les appels d’un interlocuteur,<br />ou commencez un nouvel échange.</p><button className="button button-primary" disabled={props.locked || !props.lineNumber} onClick={props.onNew}><Plus size={17} />Nouvelle conversation</button><div className="welcome-formats"><span><ChatCircle size={16} />SMS</span><span><Phone size={16} />Appels</span></div></div>}
+      </> : <div className="thread-welcome"><div className="welcome-symbol"><ChatCircle size={40} weight="thin" /></div><h2>Choisissez une conversation</h2><button className="button button-primary" disabled={props.locked || !props.lineNumber} onClick={props.onNew}><Plus size={17} />Nouvelle conversation</button><div className="welcome-formats"><span><ChatCircle size={16} />SMS</span><span><Phone size={16} />Appels</span></div></div>}
     </section>
 
     {details && props.number && <aside className="conversation-details" aria-label="Détails du contact">

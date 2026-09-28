@@ -191,17 +191,15 @@ export function PowerDialer(props: Props) {
 
   return <section className="powerdialer" hidden={!props.visible} aria-label="Powerdialer">
     <header className="pd-header">
-      <div><div className="pd-title"><Lightning size={21} weight="duotone" /><h2>{state.entries.length ? state.settings.name : "Gardez le rythme."}</h2></div><p>Une file de contacts. Une conversation à la fois.</p></div>
+      <div><div className="pd-title"><Lightning size={21} weight="duotone" /><h2>{state.entries.length ? state.settings.name : "Campagne d’appels"}</h2></div></div>
       <div className="pd-header-actions"><button className="button button-secondary" aria-label="Réglages de la campagne" disabled={!persistence.ownsSession || dialing || state.phase === "wrapup"} onClick={() => { dispatch({ type: "pause" }); setSettingsOpen(true); }}><SlidersHorizontal size={17} />Réglages</button><button className="button button-secondary" disabled={!persistence.ownsSession} onClick={openCsv}><UploadSimple size={17} />Importer CSV</button>{state.entries.length > 0 && <button className="button button-secondary" onClick={() => { dispatch({ type: "pause" }); setSummaryOpen(true); }}><ListNumbers size={16} />Bilan de session</button>}<button className="button button-primary" onClick={() => { dispatch({ type: "pause" }); setPickerOpen(true); }} disabled={!persistence.ownsSession}><Plus size={17} />Ajouter des contacts</button></div>
     </header>
     {persistence.loadError && <div className="pd-notice" role="alert">{persistence.loadError}<button className="text-button" onClick={persistence.retry}>Réessayer</button><button className="text-button" onClick={() => { const backup = persistence.backup(); if (backup) downloadDialerFile(backup, "sauvegarde-powerdialer.json", "application/json"); }}>Exporter la sauvegarde</button></div>}
     {persistence.saveError && <p className="pd-notice pd-error" role="alert">{persistence.saveError}</p>}
     {!state.entries.length ? <div className="pd-onboarding">
       <span className="pd-start-icon"><Headset size={42} weight="light" /></span>
-      <h3>Moins de clics.<br />Plus de conversations.</h3>
-      <p>Préparez votre liste, lancez le premier appel.<br />Un résultat suffit pour passer au suivant.</p>
+      <h3>Ajoutez vos premiers contacts</h3>
       <button className="button button-primary" onClick={openCsv} disabled={!persistence.ownsSession}><UploadSimple size={17} />Importer mon fichier CSV</button><button className="text-button pd-directory-link" onClick={() => setPickerOpen(true)} disabled={!persistence.ownsSession}>Choisir dans le répertoire<ArrowRight size={15} /></button>
-      <div className="pd-steps"><span><b>1</b>Importez votre liste</span><span><b>2</b>Appelez et prenez des notes</span><span><b>3</b>Qualifiez, puis enchaînez</span></div>
     </div> : <>
       <div className="pd-session-bar">
         <span className={`pd-session-status${state.running ? " is-running" : ""}`}><i />{state.phase === "complete" ? "Session terminée" : state.phase === "waiting" ? "En attente" : state.running ? "Session en cours" : state.entries.some((item) => item.attemptedAt) ? "Session en pause" : "Session prête"}</span>
@@ -299,7 +297,7 @@ function ContactPicker({ loadContacts, existing, capacity, onClose, onAdd }: { l
     finally { if (version === request.current) setLoadingMore(false); }
   }
   return <Modal title="Ajouter à la file d’appels" className="pd-picker" onClose={onClose}>
-    <p className="pd-modal-description">Choisissez les contacts à appeler, dans l’ordre de sélection. Les numéros déjà dans la file sont exclus.</p>
+    <p className="pd-modal-description">Ordre de sélection conservé. Doublons exclus.</p>
     <label className="search-field"><MagnifyingGlass size={18} /><input autoFocus type="search" placeholder="Rechercher un contact" aria-label="Rechercher dans le répertoire" maxLength={80} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
     <div className="pd-picker-toolbar"><label><input type="checkbox" checked={allSelected} disabled={!available.length || status !== "ready"} onChange={() => setSelected((current) => { const next = new Map(current); for (const item of available) { if (allSelected) next.delete(item.number); else next.set(item.number, item); } return next; })} />Toute la liste affichée</label><span>{selected.size} sélectionné{selected.size > 1 ? "s" : ""}</span></div>
     <div className="pd-picker-list" aria-busy={status === "loading"}>

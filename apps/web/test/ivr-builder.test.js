@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultVoiceFlow, voiceFlowSchema } from '@onoff/contracts';
-import { addSubmenu, nextDigit, pruneMenus, referencedQueueIds, removeBranch, replaceDestination } from '../src/ivr-builder-model.ts';
+import { addSubmenu, clearDestination, isEmptyDestination, nextDigit, pruneMenus, referencedQueueIds, removeBranch, removeMenu, replaceDestination } from '../src/ivr-builder-model.ts';
 
 test('adding a submenu preserves the destination and leaves the previous draft untouched', () => {
   const flow = defaultVoiceFlow();
@@ -74,4 +74,67 @@ test('wrapping a shared menu preserves every route to it', () => {
   assert.equal(flow.menus.length, 3);
   assert.deepEqual(flow.menus.find(menu => menu.id === 'root').options[0].destination, { type: 'menu', menuId: 'accueil' });
   assert.equal(voiceFlowSchema.safeParse(flow).success, true);
+});
+
+test('deleting the root menu reconnects to its fallback and preserves the original draft', () => {
+  const flow = addSubmenu(defaultVoiceFlow(), { kind: 'branch', menuId: 'accueil', index: 0 }, 'child');
+  flow.menus[0].fallback = { type: 'number', number: '+33123456789' };
+  const next = removeMenu(flow, 'accueil');
+  assert.deepEqual(next.entry, flow.menus[0].fallback);
+  assert.deepEqual(next.menus, []);
+  assert.equal(flow.menus.length, 2);
+  assert.deepEqual(flow.entry, { type: 'menu', menuId: 'accueil' });
+  assert.equal(voiceFlowSchema.safeParse(next).success, true);
+});
+
+test('deleting a shared menu reconnects branches, fallbacks and the closed route', () => {
+  const flow = addSubmenu(defaultVoiceFlow(), { kind: 'branch', menuId: 'accueil', index: 0 }, 'shared');
+  flow.menus[0].options.push({ digit: '2', label: 'autre choix', destination: { type: 'menu', menuId: 'shared' } });
+  flow.menus[0].fallback = { type: 'menu', menuId: 'shared' };
+  flow.schedule.closed = { type: 'menu', menuId: 'shared' };
+  const next = removeMenu(flow, 'shared');
+  assert.equal(next.menus.length, 1);
+  assert.ok(next.menus[0].options.every(option => option.destination.type === 'voicemail'));
+  assert.deepEqual(next.menus[0].fallback, { type: 'voicemail' });
+  assert.deepEqual(next.schedule.closed, { type: 'voicemail' });
+  assert.equal(voiceFlowSchema.safeParse(next).success, true);
+});
+
+test('deleting a menu preserves its fallback subtree and menus still used elsewhere', () => {
+  let flow = addSubmenu(defaultVoiceFlow(), { kind: 'branch', menuId: 'accueil', index: 0 }, 'shared');
+  flow = addSubmenu(flow, { kind: 'fallback', menuId: 'accueil' }, 'fallback');
+  flow.schedule.closed = { type: 'menu', menuId: 'shared' };
+  const next = removeMenu(flow, 'accueil');
+  assert.deepEqual(next.entry, { type: 'menu', menuId: 'fallback' });
+  assert.deepEqual(next.menus.map(menu => menu.id), ['shared', 'fallback']);
+  assert.equal(voiceFlowSchema.safeParse(next).success, true);
+});
+
+test('deleting a menu with a self-reference never leaves a dangling destination', () => {
+  const flow = defaultVoiceFlow();
+  flow.menus[0].fallback = { type: 'menu', menuId: 'accueil' };
+  const next = removeMenu(flow, 'accueil');
+  assert.deepEqual(next.entry, { type: 'voicemail' });
+  assert.equal(voiceFlowSchema.safeParse(next).success, true);
+  assert.equal(removeMenu(flow, 'missing'), flow);
+});
+
+test('clearing an action preserves its key and requires a replacement before saving', () => {
+  const flow = defaultVoiceFlow();
+  const target = { kind: 'branch', menuId: 'accueil', index: 0 };
+  const next = clearDestination(flow, target);
+  assert.equal(next.menus[0].options[0].digit, '1');
+  assert.equal(next.menus[0].options[0].label, 'laisser un message');
+  assert.equal(isEmptyDestination(next.menus[0].options[0].destination), true);
+  assert.equal(voiceFlowSchema.safeParse(next).success, false);
+  assert.equal(voiceFlowSchema.safeParse(replaceDestination(next, target, { type: 'hangup' })).success, true);
+  assert.deepEqual(flow.menus[0].options[0].destination, { type: 'voicemail' });
+});
+
+test('adding a menu to an empty action starts with a usable voicemail destination', () => {
+  const target = { kind: 'branch', menuId: 'accueil', index: 0 };
+  const flow = clearDestination(defaultVoiceFlow(), target);
+  const next = addSubmenu(flow, target, 'new');
+  assert.deepEqual(next.menus.find(menu => menu.id === 'new').options[0].destination, { type: 'voicemail' });
+  assert.equal(voiceFlowSchema.safeParse(next).success, true);
 });

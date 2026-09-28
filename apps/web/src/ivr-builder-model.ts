@@ -45,7 +45,8 @@ export function replaceDestination(flow: VoiceFlow, address: DestinationAddress,
 }
 
 export function addSubmenu(flow: VoiceFlow, address: DestinationAddress, id: string): VoiceFlow {
-  const previous = readDestination(flow, address);
+  const current = readDestination(flow, address);
+  const previous = current && isEmptyDestination(current) ? { type: "voicemail" } as const : current;
   if (!previous || flow.menus.length >= 12 || flow.menus.some(menu => menu.id === id)) return flow;
   const menu: IvrMenu = {
     id, name: "Nouveau menu", prompt: "Comment pouvons-nous vous aider ?", timeout: 5, maxAttempts: 2,
@@ -58,6 +59,35 @@ export function addSubmenu(flow: VoiceFlow, address: DestinationAddress, id: str
 export function removeBranch(flow: VoiceFlow, menuId: string, index: number): VoiceFlow {
   return pruneMenus({ ...flow, menus: flow.menus.map(menu => menu.id === menuId
     ? { ...menu, options: menu.options.filter((_, position) => position !== index) } : menu) });
+}
+
+// Removing a menu reconnects every incoming route to its fallback. Resolve
+// self-references before pruning so a deleted menu can never remain a target.
+export function removeMenu(flow: VoiceFlow, menuId: string): VoiceFlow {
+  const menu = flow.menus.find(item => item.id === menuId);
+  if (!menu) return flow;
+  const fallback: VoiceDestination = menu.fallback.type === "menu" && menu.fallback.menuId === menuId
+    ? { type: "voicemail" } : menu.fallback;
+  const reconnect = (destination: VoiceDestination) => destination.type === "menu" && destination.menuId === menuId ? fallback : destination;
+  return pruneMenus({
+    ...flow,
+    entry: reconnect(flow.entry),
+    schedule: { ...flow.schedule, closed: reconnect(flow.schedule.closed) },
+    menus: flow.menus.filter(item => item.id !== menuId).map(item => ({
+      ...item, fallback: reconnect(item.fallback),
+      options: item.options.map(option => ({ ...option, destination: reconnect(option.destination) })),
+    })),
+  });
+}
+
+// An empty number is an editable, incomplete destination, just as in the number
+// picker. Validation prevents saving or publishing until an action is chosen.
+export function clearDestination(flow: VoiceFlow, address: DestinationAddress): VoiceFlow {
+  return replaceDestination(flow, address, { type: "number", number: "" });
+}
+
+export function isEmptyDestination(destination: VoiceDestination): boolean {
+  return destination.type === "number" && !destination.number;
 }
 
 export function referencedQueueIds(flow: VoiceFlow): Set<string> {

@@ -112,10 +112,6 @@ export function ApiIntegrations({
           Documentation API ↗
         </a>
       </div>
-      <p className="settings-description">
-        Connectez vos outils aux contacts, SMS et appels. Recevez les événements
-        sur votre serveur pour déclencher vos automatisations.
-      </p>
       {!isAdmin && (
         <p className="settings-description">
           Un administrateur de votre organisation peut configurer les webhooks.

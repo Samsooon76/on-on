@@ -7,11 +7,7 @@
 .pd-header-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 .pd-onboarding { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; padding: 35px 25px; overflow: auto; text-align: center; }
 .pd-start-icon { display: grid; place-items: center; background: var(--surface); border: 1px solid var(--line); color: var(--accent); width: 86px; height: 86px; border-radius: 24px; margin-bottom: 25px; }
-.pd-onboarding h3 { font-size: clamp(28px, 3vw, 39px); font-weight: 400; line-height: 1.18; letter-spacing: -.045em; }
-.pd-onboarding > p { color: var(--muted); font-size: 13px; line-height: 1.85; margin: 18px 0 25px; }
-.pd-steps { display: flex; gap: 30px; margin: 50px 0 32px; }
-.pd-steps span { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; }
-.pd-steps b { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; border: 1px solid var(--line); font-size: 10px; color: var(--accent); font-weight: 500; }
+.pd-onboarding h3 { margin-bottom: 24px; font-size: clamp(28px, 3vw, 39px); font-weight: 400; line-height: 1.18; letter-spacing: -.045em; }
 .pd-coming { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .pd-session-bar { display: flex; align-items: center; gap: 22px; padding: 14px 32px; border-block: 1px solid var(--line); background: var(--canvas); font-size: 11px; color: var(--muted); flex-shrink: 0; }
 .pd-session-status { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; color: var(--muted); }
@@ -155,7 +151,6 @@
   .pd-control-actions .button { min-height: 40px; font-size: 11px; }
   .pd-control-actions .pd-start-call { flex: 1; }
   .pd-shortcuts { display: none; }
-  .pd-steps { flex-direction: column; align-items: flex-start; gap: 15px; margin: 30px 0; }
   .pd-onboarding { padding: 20px 20px 40px; }
   .pd-onboarding h3 { font-size: 30px; }
   .pd-coming { align-items: flex-start; text-align: left; }

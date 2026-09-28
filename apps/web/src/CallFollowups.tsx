@@ -41,10 +41,10 @@ export function CallFollowups({ organizationId, api, onCall }: { organizationId:
     finally { setUpdating(""); }
   }
   return <section className="followups-page" aria-label="Tickets et deals">
-    <header><div><h2>Le suivi de vos appels</h2><p>Les tickets et opportunités créés pendant vos échanges.</p></div><label className="field-label">Afficher<select aria-label="Type de suivi" value={kind} onChange={event => setKind(event.target.value as typeof kind)}><option value="">Tickets et deals</option><option value="ticket">Tickets</option><option value="deal">Deals</option></select></label></header>
+    <header><div><h2>Suivi des appels</h2></div><label className="field-label">Afficher<select aria-label="Type de suivi" value={kind} onChange={event => setKind(event.target.value as typeof kind)}><option value="">Tickets et deals</option><option value="ticket">Tickets</option><option value="deal">Deals</option></select></label></header>
     {error && <p className="form-error" role="alert">{error} <button className="text-button" onClick={() => setRevision(value => value + 1)}>Actualiser</button></p>}
     {loading && <p role="status">Chargement des suivis…</p>}
-    {!loading && !error && !items.length && <EmptyState icon={<Ticket size={28} />} title="Aucun suivi pour le moment"><p>Pendant ou après un appel, utilisez le bouton + du composeur pour créer un ticket ou un deal.</p></EmptyState>}
+    {!loading && !error && !items.length && <EmptyState icon={<Ticket size={28} />} title="Aucun suivi pour le moment"><p>Créez un ticket ou un deal avec le bouton + du composeur.</p></EmptyState>}
     <div className="followups-list">{items.map(item => <article key={item.id}>
       <span className="followup-icon">{item.kind === "ticket" ? <Ticket size={22} /> : <Handshake size={22} />}</span>
       <div className="followup-content"><small>{item.kind === "ticket" ? "Ticket" : "Deal"} · {new Date(item.created_at).toLocaleDateString("fr-FR")}{item.kind === "ticket" && item.priority !== "normal" ? ` · Priorité ${item.priority === "urgent" ? "urgente" : "haute"}` : ""}</small><h3>{item.title}</h3><p>{formatPhone(item.remote_number)}{item.amount !== null ? ` · ${new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(item.amount)}` : ""}</p>{item.description && <p className="followup-description">{item.description}</p>}<button className="text-button" onClick={() => onCall(item.call_id)}>Voir l’appel</button></div>

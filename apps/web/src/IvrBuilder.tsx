@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowBendUpLeft, ArrowCounterClockwise, ArrowClockwise, ArrowRight, Check, Clock, FloppyDisk, GearSix, GitBranch, Headset, Microphone, Phone, PhoneDisconnect, Plus, Trash, User, Voicemail } from "@phosphor-icons/react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ArrowBendUpLeft, ArrowCounterClockwise, ArrowClockwise, ArrowRight, Check, Clock, DotsThree, FloppyDisk, GearSix, GitBranch, Headset, Microphone, Phone, PhoneDisconnect, PencilSimple, Plus, Trash, User, Voicemail } from "@phosphor-icons/react";
 import { defaultVoiceFlow, queueConfigSchema, voiceFlowSchema, type AdminLine, type CenterSnapshot, type QueueConfig, type VoiceDestination, type VoiceFlow, type VoiceFlowRecord, type VoiceQueue } from "@onoff/contracts";
 import { Modal } from "./ui";
 import { formatPhone } from "./conversation-model";
-import { addSubmenu, digits, nextDigit, pruneMenus, readDestination, referencedQueueIds, removeBranch, replaceDestination, type DestinationAddress, type IvrMenu } from "./ivr-builder-model";
+import { addSubmenu, clearDestination, digits, isEmptyDestination, nextDigit, pruneMenus, readDestination, referencedQueueIds, removeBranch, removeMenu, replaceDestination, type DestinationAddress, type IvrMenu } from "./ivr-builder-model";
 import "./ivr-builder.css";
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Member = { user_id: string; display_name: string };
+type ActionKind = "menu" | "number" | "queue" | "voicemail" | "hangup";
 type Selection = DestinationAddress | { kind: "greeting" | "settings" | "hours" } | { kind: "menu"; menuId: string };
 type Props = { line: AdminLine; record: VoiceFlowRecord | undefined; queues: VoiceQueue[]; members?: Member[]; api: Api; base: string; onClose(): void; onSaved(published: boolean): Promise<void> };
 const message = (error: unknown) => error instanceof Error ? error.message : "Impossible d’enregistrer le parcours.";
@@ -37,6 +38,9 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
     previousSelection.current = requestedSelection;
     if (window.matchMedia("(max-width: 700px)").matches) inspectorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [requestedSelection]);
+  const [notice, setNotice] = useState("");
+  const [editingNumber, setEditingNumber] = useState<string | null>(null);
+  const hasGreeting = !!(flow.greeting || flow.greetingAudioUrl);
   const [trail, setTrail] = useState<string[]>([]);
   const [localQueues, setLocalQueues] = useState<VoiceQueue[]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -58,19 +62,54 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
 
   function change(next: VoiceFlow) {
     setHistory(current => ({ past: [...current.past.slice(-49), current.present], present: next, future: [] }));
-    setError("");
+    setError(""); setNotice("");
   }
-  function undo() { setHistory(current => current.past.length ? { past: current.past.slice(0, -1), present: current.past.at(-1)!, future: [current.present, ...current.future] } : current); setError(""); }
-  function redo() { setHistory(current => current.future.length ? { past: [...current.past, current.present], present: current.future[0]!, future: current.future.slice(1) } : current); setError(""); }
+  function undo() { setHistory(current => current.past.length ? { past: current.past.slice(0, -1), present: current.past.at(-1)!, future: [current.present, ...current.future] } : current); setError(""); setNotice("Modification annulée."); }
+  function redo() { setHistory(current => current.future.length ? { past: [...current.past, current.present], present: current.future[0]!, future: current.future.slice(1) } : current); setError(""); setNotice("Modification rétablie."); }
   function patchMenu(id: string, patch: Partial<IvrMenu>) { change({ ...flow, menus: flow.menus.map(menu => menu.id === id ? { ...menu, ...patch } : menu) }); }
   function patchOption(patch: Partial<IvrMenu["options"][number]>) {
     if (selection.kind !== "branch" || !selectedMenu) return;
     patchMenu(selectedMenu.id, { options: selectedMenu.options.map((option, index) => index === selection.index ? { ...option, ...patch } : option) });
   }
-  function addBranch(menu: IvrMenu) {
+  function actionDestination(kind: Exclude<ActionKind, "menu">): VoiceDestination {
+    return kind === "queue" ? { type: "queue", queueId: "" } : kind === "number" ? { type: "number", number: "" } : { type: kind };
+  }
+  function addBranch(menu: IvrMenu, kind: ActionKind = "voicemail") {
     const digit = nextDigit(menu); if (!digit) return;
-    patchMenu(menu.id, { options: [...menu.options, { digit, label: "", destination: { type: "voicemail" } }] });
-    setSelection({ kind: "branch", menuId: menu.id, index: menu.options.length });
+    const target: DestinationAddress = { kind: "branch", menuId: menu.id, index: menu.options.length };
+    const next = { ...flow, menus: flow.menus.map(item => item.id === menu.id ? { ...item, options: [...item.options, { digit, label: "", destination: actionDestination(kind === "menu" ? "voicemail" : kind) }] } : item) };
+    if (kind === "menu") {
+      const id = `menu_${crypto.randomUUID().replaceAll("-", "")}`;
+      change(addSubmenu(next, target, id));
+    } else change(next);
+    setEditingNumber(kind === "number" ? JSON.stringify(target) : null);
+    setSelection(target);
+  }
+  function chooseAction(target: DestinationAddress, kind: ActionKind) {
+    setEditingNumber(kind === "number" ? JSON.stringify(target) : null);
+    if (kind === "menu") createMenu(target);
+    else { change(replaceDestination(flow, target, actionDestination(kind))); setSelection(target); }
+  }
+  function deleteGreeting() {
+    change({ ...flow, greeting: "", greetingAudioUrl: null });
+    setSelection(rootMenu ? { kind: "menu", menuId: rootMenu.id } : { kind: "entry" });
+    setNotice("Message d’accueil supprimé.");
+  }
+  function deleteBranch(menuId: string, index: number) {
+    change(removeBranch(flow, menuId, index)); setSelection({ kind: "menu", menuId });
+    setNotice("Choix supprimé.");
+  }
+  function deleteMenu(menuId: string) {
+    const next = removeMenu(flow, menuId);
+    const remainingPath = path.filter(id => next.menus.some(menu => menu.id === id));
+    const parentId = remainingPath.at(-1) ?? (next.entry.type === "menu" ? next.entry.menuId : undefined);
+    change(next); setTrail(remainingPath);
+    setSelection(parentId ? { kind: "menu", menuId: parentId } : { kind: "entry" });
+    setNotice("Menu supprimé. Les appels suivent sa destination sans choix.");
+  }
+  function deleteAction(target: DestinationAddress) {
+    change(clearDestination(flow, target)); setEditingNumber(null); setSelection(target);
+    setNotice("Action supprimée. Utilisez le + pour en ajouter une.");
   }
   function openMenu(id: string) {
     const existing = path.indexOf(id);
@@ -103,7 +142,7 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
           const menu = config.menus[issue.path[1]];
           if (menu) { openMenu(menu.id); if (issue.path[2] === "options" && typeof issue.path[3] === "number") setSelection({ kind: "branch", menuId: menu.id, index: issue.path[3] }); }
         }
-        throw new Error(issue?.path.includes("label") ? "Donnez un nom à chaque choix." : issue?.path.includes("queueId") ? "Choisissez l’agent ou la file de ce choix." : issue?.path.at(-1) === "options" ? "Ajoutez au moins un choix à ce menu." : issue?.message);
+        throw new Error(issue?.path.includes("label") ? "Donnez un nom à chaque choix." : issue?.path.includes("queueId") ? "Choisissez l’agent ou la file de ce choix." : issue?.path.at(-1) === "number" && issue.code === "invalid_format" ? "Choisissez une action et renseignez un numéro au format international si nécessaire." : issue?.path.at(-1) === "options" ? "Ajoutez au moins un choix à ce menu." : issue?.message);
       }
       const referenced = referencedQueueIds(config);
       const pending = localQueues.filter(queue => referenced.has(queue.id));
@@ -129,7 +168,7 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
 
   const picker = (target: DestinationAddress, destination: VoiceDestination) => <DestinationPicker
     key={JSON.stringify(target)} value={destination} queues={allQueues} localIds={localQueues.map(queue => queue.id)} members={members} menus={flow.menus}
-    onChange={next => change(replaceDestination(flow, target, next))} onNewMenu={() => createMenu(target)} canAddMenu={flow.menus.length < 12}
+    onChange={next => { setEditingNumber(next.type === "number" ? JSON.stringify(target) : null); change(replaceDestination(flow, target, next)); }} onNewMenu={() => createMenu(target)} canAddMenu={flow.menus.length < 12}
     onNewQueue={newQueue} onEditQueue={editQueue} onOpenMenu={openMenu}/>;
   const routeName = (destination: VoiceDestination) => destinationName(destination, allQueues, flow.menus);
   const panelTitle = selection.kind === "greeting" ? "Message d’accueil" : selection.kind === "settings" ? "Réglages du parcours" : selection.kind === "hours" ? "Horaires d’ouverture" : selection.kind === "menu" ? selectedMenu?.name ?? "Menu" : selection.kind === "branch" ? `Choix · touche ${selectedOption?.digit ?? ""}` : selection.kind === "fallback" ? "Sans réponse au menu" : selection.kind === "closed" ? "En dehors des horaires" : "Après l’accueil";
@@ -146,43 +185,63 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
         <div className="ivr-canvas">
           <div className="ivr-canvas-toolbar"><nav aria-label="Niveaux du parcours"><button type="button" onClick={() => { setTrail([]); setSelection({ kind: "greeting" }); }}>Vue d’ensemble</button>{path.map((id, index) => <span key={id}><span aria-hidden="true">/</span><button type="button" onClick={() => { setTrail(path.slice(0, index + 1)); setSelection({ kind: "menu", menuId: id }); }}>{flow.menus.find(menu => menu.id === id)?.name}</button></span>)}</nav><div className="ivr-canvas-tools"><button type="button" className={`ivr-hours ${selection.kind === "hours" ? "selected" : ""}`} onClick={() => setSelection({ kind: "hours" })}><Clock/>{flow.schedule.enabled ? `${flow.schedule.opensAt} – ${flow.schedule.closesAt}` : "24 h / 24"}</button><button type="button" className={`ivr-settings-button ${selection.kind === "settings" ? "selected" : ""}`} onClick={() => setSelection({ kind: "settings" })}><GearSix/>Réglages</button></div></div>
           <div className="ivr-tree">
-            {!path.length && <><Node selected={selection.kind === "greeting"} icon={<Microphone/>} eyebrow="Appel entrant · Accueillir" title="Message d’accueil" description={flow.greetingAudioUrl ? "Annonce audio" : flow.greeting || "Aucun message d’accueil"} onClick={() => setSelection({ kind: "greeting" })}/><div className="ivr-wire"/></>}
-            {path.length > 0 && <><button type="button" className="ivr-back" onClick={() => { setTrail(path.slice(0, -1)); setSelection({ kind: "greeting" }); }}><ArrowBendUpLeft/>Niveau précédent</button><div className="ivr-wire"/></>}
+            {!path.length && <>
+              <div className="ivr-incoming"><Phone/>Appel entrant</div>
+              <div className="ivr-wire"/>
+              {hasGreeting ? <Node selected={selection.kind === "greeting"} icon={<Microphone/>} eyebrow="Accueillir l’appelant" title="Message d’accueil" description={flow.greetingAudioUrl ? "Annonce audio" : flow.greeting} onClick={() => setSelection({ kind: "greeting" })} onDelete={deleteGreeting}/>
+                : <button type="button" className="ivr-add-point" onClick={() => { change({ ...flow, greeting: "Bienvenue." }); setSelection({ kind: "greeting" }); }}><span><Plus/></span>Ajouter un message d’accueil</button>}
+              <div className="ivr-wire"/>
+            </>}
+            {path.length > 0 && <><button type="button" className="ivr-back" onClick={() => { const parentPath = path.slice(0, -1); setTrail(parentPath); const id = parentPath.at(-1) ?? rootMenu?.id; setSelection(id ? { kind: "menu", menuId: id } : { kind: "entry" }); }}><ArrowBendUpLeft/>Niveau précédent</button><div className="ivr-wire"/></>}
             {visibleMenu ? <>
-              <Node selected={selection.kind === "menu" && selection.menuId === visibleMenu.id} icon={<GitBranch/>} eyebrow={path.length ? "Sous-menu" : "Choix des touches"} title={visibleMenu.name} description={visibleMenu.prompt} onClick={() => setSelection({ kind: "menu", menuId: visibleMenu.id })}/>
+              <Node selected={selection.kind === "menu" && selection.menuId === visibleMenu.id} icon={<GitBranch/>} eyebrow={path.length ? "Sous-menu" : "Choix des touches"} title={visibleMenu.name} description={visibleMenu.prompt} onClick={() => setSelection({ kind: "menu", menuId: visibleMenu.id })} onDelete={() => deleteMenu(visibleMenu.id)}/>
               <div className="ivr-wire"/>
               <div className="ivr-branches" role="group" aria-label={`Choix de ${visibleMenu.name}`}>
-                <p>Quand l’appelant appuie sur une touche :</p>
-                {visibleMenu.options.map((option, index) => <div className="ivr-branch-row" key={option.digit}>
-                  <button type="button" className={`ivr-branch-condition ${selection.kind === "branch" && selection.menuId === visibleMenu.id && selection.index === index ? "selected" : ""}`} onClick={() => setSelection({ kind: "branch", menuId: visibleMenu.id, index })}><kbd>{option.digit}</kbd><span>{option.label || "Nommer ce choix"}</span></button>
-                  <ArrowRight aria-hidden="true"/>
-                  <button type="button" className="ivr-branch-destination" onClick={() => setSelection({ kind: "branch", menuId: visibleMenu.id, index })}>{destinationIcon(option.destination)}<span>{routeName(option.destination)}</span></button>
-                  {option.destination.type === "menu" && <button type="button" className="ivr-continue" onClick={() => { if (option.destination.type === "menu") openMenu(option.destination.menuId); }}>Ouvrir <ArrowRight/></button>}
-                </div>)}
-                <button type="button" className="ivr-add" disabled={visibleMenu.options.length >= 10} onClick={() => addBranch(visibleMenu)}><Plus/><span>Ajouter un choix</span></button>
+                {visibleMenu.options.map((option, index) => {
+                  const target: DestinationAddress = { kind: "branch", menuId: visibleMenu.id, index };
+                  const selected = selection.kind === "branch" && selection.menuId === visibleMenu.id && selection.index === index;
+                  return <div className="ivr-branch" key={option.digit}>
+                    <Node icon={<kbd>{option.digit}</kbd>} eyebrow="Quand l’appelant appuie sur" title={`Touche ${option.digit}`} description={option.label || "Nommer ce choix"} selected={selected} onClick={() => setSelection(target)} onDelete={() => deleteBranch(visibleMenu.id, index)} deleteLabel="Supprimer ce choix"/>
+                    <div className="ivr-wire"/>
+                    {isEmptyDestination(option.destination)
+                      ? <ActionMenu label={`Ajouter une action pour la touche ${option.digit}`} caption="Ajouter une action" canAddMenu={flow.menus.length < 12} onChoose={kind => chooseAction(target, kind)}/>
+                      : <>
+                        <Node icon={destinationIcon(option.destination)} eyebrow="Puis" title={routeName(option.destination)} selected={selected} onClick={() => setSelection(target)} onDelete={() => deleteAction(target)} deleteLabel="Supprimer cette action"/>
+                        {option.destination.type === "menu" ? <button type="button" className="ivr-continue" onClick={() => { if (option.destination.type === "menu") openMenu(option.destination.menuId); }}>Ouvrir le sous-menu <ArrowRight/></button>
+                          : <button type="button" className="ivr-insert" disabled={flow.menus.length >= 12} onClick={() => createMenu(target)} title="Insérer un menu avant cette action"><Plus/>Insérer un menu</button>}
+                      </>}
+                  </div>;
+                })}
+                <div className="ivr-branch ivr-branch-add"><ActionMenu label="Ajouter un choix" caption={visibleMenu.options.length >= 10 ? "10 touches utilisées" : "Ajouter un choix"} disabled={visibleMenu.options.length >= 10} canAddMenu={flow.menus.length < 12} onChoose={kind => addBranch(visibleMenu, kind)}/></div>
               </div>
+              {!visibleMenu.options.length && <p className="ivr-empty-help">Ajoutez une touche et choisissez l’action à effectuer.</p>}
               <button type="button" className={`ivr-fallback ${selection.kind === "fallback" && selection.menuId === visibleMenu.id ? "selected" : ""}`} onClick={() => setSelection({ kind: "fallback", menuId: visibleMenu.id })}><Clock/>Sans choix après {visibleMenu.maxAttempts} tentative{visibleMenu.maxAttempts > 1 ? "s" : ""}<ArrowRight/>{routeName(visibleMenu.fallback)}</button>
-            </> : <><Node icon={destinationIcon(flow.entry)} eyebrow="Destination des appels" title={routeName(flow.entry)} selected={selection.kind === "entry"} onClick={() => setSelection({ kind: "entry" })}/><button type="button" className="ivr-create-menu" onClick={() => createMenu({ kind: "entry" })} disabled={flow.menus.length >= 12}><Plus/>Ajouter des choix</button></>}
+            </> : <>
+              {isEmptyDestination(flow.entry) ? <ActionMenu label="Ajouter une action après l’accueil" caption="Ajouter une action" canAddMenu={flow.menus.length < 12} onChoose={kind => chooseAction({ kind: "entry" }, kind)}/>
+                : <><Node icon={destinationIcon(flow.entry)} eyebrow="Destination des appels" title={routeName(flow.entry)} selected={selection.kind === "entry"} onClick={() => setSelection({ kind: "entry" })} onDelete={() => deleteAction({ kind: "entry" })}/><button type="button" className="ivr-insert" onClick={() => createMenu({ kind: "entry" })} disabled={flow.menus.length >= 12}><Plus/>Ajouter un menu à touches</button></>}
+            </>}
             {flow.schedule.enabled && !path.length && <button type="button" className="ivr-fallback" onClick={() => setSelection({ kind: "closed" })}><Clock/>En dehors des horaires<ArrowRight/>{routeName(flow.schedule.closed)}</button>}
           </div>
-          <p className="ivr-canvas-hint">Sélectionnez un élément du parcours pour modifier ses réglages à droite.</p>
+          <p className="ivr-canvas-hint">Ajoutez avec + · Modifiez ou supprimez avec ···</p>
         </div>
         <aside ref={inspectorRef} className="ivr-inspector" aria-label="Modifier le bloc sélectionné">
           <div className="ivr-inspector-heading"><span>PERSONNALISER</span><h3>{panelTitle}</h3></div>
           <div className="ivr-inspector-body">
             {selection.kind === "greeting" && <>
-              <p className="ivr-help">Le premier message entendu par vos appelants.</p>
               <label className="field-label">Votre message<textarea rows={4} maxLength={1000} value={flow.greeting} onChange={event => change({ ...flow, greeting: event.target.value })}/></label>
               <label className="field-label">Langue<select value={flow.language} onChange={event => change({ ...flow, language: event.target.value as VoiceFlow["language"] })}><option value="fr-FR">Français</option><option value="en-GB">English (UK)</option><option value="en-US">English (US)</option></select></label>
               <details className="ivr-details"><summary>Utiliser un fichier audio</summary><label className="field-label">Lien HTTPS de l’annonce<input type="url" placeholder="https://…/bienvenue.mp3" value={flow.greetingAudioUrl ?? ""} onChange={event => change({ ...flow, greetingAudioUrl: event.target.value || null })}/><small>L’audio remplace le texte d’accueil.</small></label></details>
               <button type="button" className="ivr-panel-link" onClick={() => setSelection({ kind: "entry" })}>Après l’accueil : {routeName(flow.entry)}<ArrowRight/></button>
+              {hasGreeting && <button type="button" className="ivr-delete" onClick={deleteGreeting}><Trash/>Supprimer le message d’accueil</button>}
             </>}
             {selection.kind === "menu" && selectedMenu && <>
               <label className="field-label">Nom du menu<input maxLength={80} value={selectedMenu.name} onChange={event => patchMenu(selectedMenu.id, { name: event.target.value })}/></label>
               <label className="field-label">Annonce du menu<textarea rows={3} maxLength={1000} value={selectedMenu.prompt} onChange={event => patchMenu(selectedMenu.id, { prompt: event.target.value })}/><small>Les choix « Pour …, tapez … » sont ajoutés automatiquement.</small></label>
               <div className="ivr-spoken-preview"><Microphone size={16}/><p>{selectedMenu.prompt} {selectedMenu.options.map(option => `Pour ${option.label || "…"}, tapez ${option.digit}.`).join(" ")}</p></div>
-              <button type="button" className="button button-secondary" disabled={selectedMenu.options.length >= 10} onClick={() => addBranch(selectedMenu)}><Plus/>Ajouter une branche</button>
+              <ActionMenu label="Ajouter un choix au menu" caption="Ajouter un choix" disabled={selectedMenu.options.length >= 10} canAddMenu={flow.menus.length < 12} onChoose={kind => addBranch(selectedMenu, kind)}/>
               <button type="button" className="ivr-panel-link" onClick={() => setSelection({ kind: "fallback", menuId: selectedMenu.id })}>Attente et absence de choix<ArrowRight/></button>
+              <button type="button" className="ivr-delete" onClick={() => deleteMenu(selectedMenu.id)}><Trash/>Supprimer ce menu</button>
+              <p className="ivr-delete-help">Les appels continueront vers : {routeName(selectedMenu.fallback)}.</p>
             </>}
             {selection.kind === "branch" && selectedMenu && selectedOption && <>
               <div className="ivr-option-fields"><label className="field-label">Touche<select value={selectedOption.digit} onChange={event => patchOption({ digit: event.target.value })}>{digits.map(digit => <option key={digit} disabled={selectedMenu.options.some((option, index) => index !== selection.index && option.digit === digit)}>{digit}</option>)}</select></label><label className="field-label">Pour…<input key={`${selectedMenu.id}:${selection.index}`} autoFocus maxLength={80} placeholder="le service commercial" value={selectedOption.label} onChange={event => patchOption({ label: event.target.value })}/></label></div>
@@ -193,8 +252,10 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
               <label className="field-label">Attente par tentative (secondes)<input type="number" min={3} max={15} value={selectedMenu.timeout} onChange={event => patchMenu(selectedMenu.id, { timeout: Number(event.target.value) })}/></label>
               <label className="field-label">Nombre de tentatives<select value={selectedMenu.maxAttempts} onChange={event => patchMenu(selectedMenu.id, { maxAttempts: Number(event.target.value) })}>{[1, 2, 3].map(count => <option key={count}>{count}</option>)}</select></label>
             </>}
-            {address && selectedDestination && picker(address, selectedDestination)}
-            {selection.kind === "branch" && selectedOption && <button type="button" className="ivr-delete" onClick={() => { change(removeBranch(flow, selection.menuId, selection.index)); setSelection({ kind: "menu", menuId: selection.menuId }); }}><Trash/>Supprimer ce choix</button>}
+            {address && selectedDestination && (isEmptyDestination(selectedDestination) && editingNumber !== JSON.stringify(address)
+              ? <><p className="ivr-help">Choisissez la prochaine action de ce parcours.</p><ActionMenu label="Ajouter une action au bloc sélectionné" caption="Ajouter une action" canAddMenu={flow.menus.length < 12} onChoose={kind => chooseAction(address, kind)}/></>
+              : picker(address, selectedDestination))}
+            {selection.kind === "branch" && selectedOption && <button type="button" className="ivr-delete" onClick={() => deleteBranch(selection.menuId, selection.index)}><Trash/>Supprimer ce choix</button>}
             {selection.kind === "hours" && <>
               <label className="ivr-toggle"><input type="checkbox" checked={flow.schedule.enabled} onChange={event => change({ ...flow, schedule: { ...flow.schedule, enabled: event.target.checked } })}/><span>Définir des horaires d’ouverture</span></label>
               {!flow.schedule.enabled ? <p className="ivr-help">Ce parcours accueille les appels à toute heure.</p> : <>
@@ -205,7 +266,7 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
               </>}
             </>}
             {selection.kind === "settings" && <>
-              <p className="ivr-help">Pour activer ou désactiver le menu sans modifier ce brouillon, utilisez l’interrupteur sur la carte du numéro.</p>
+              <p className="ivr-help">Activation du menu : interrupteur sur la carte du numéro.</p>
               <label className="field-label">Annonce de messagerie<textarea rows={4} maxLength={1000} value={flow.voicemailGreeting} onChange={event => change({ ...flow, voicemailGreeting: event.target.value })}/></label>
               <label className="field-label">Durée maximale du message (secondes)<input type="number" min={10} max={300} value={flow.maxRecordingSeconds} onChange={event => change({ ...flow, maxRecordingSeconds: Number(event.target.value) })}/></label>
               <details className="ivr-details"><summary>Renvois vers un numéro externe</summary><label className="field-label">Durée de sonnerie (secondes)<input type="number" min={5} max={60} value={flow.ringTimeout} onChange={event => change({ ...flow, ringTimeout: Number(event.target.value) })}/></label><label className="field-label">Sans réponse<select value={flow.noAnswer} onChange={event => change({ ...flow, noAnswer: event.target.value as VoiceFlow["noAnswer"] })}><option value="voicemail">Messagerie vocale</option><option value="hangup">Fin de l’appel</option></select></label></details>
@@ -214,13 +275,63 @@ export function FlowEditor({ line, record, queues, members = [], api, base, onCl
           </div>
         </aside>
       </div>
+      {notice && <div className="ivr-notice" role="status"><Check/><span>{notice}</span><button type="button" onClick={undo} disabled={!history.past.length}>Annuler</button></div>}
       <div className="ivr-bottom"><span><Check/>Enregistrer garde vos changements en brouillon. Publier les applique aux nouveaux appels et active l’IVR.</span><span>{flow.menus.reduce((total, menu) => total + menu.options.length, 0)} choix · {flow.menus.length} menu{flow.menus.length > 1 ? "s" : ""}</span></div>
     </fieldset>
   </Modal>;
 }
 
-function Node({ icon, eyebrow, title, description, onClick, selected = false }: { icon: ReactNode; eyebrow: string; title: string; description?: string; onClick(): void; selected?: boolean }) {
-  return <button type="button" className={`ivr-node ${selected ? "selected" : ""}`} onClick={onClick}><span className="ivr-node-icon">{icon}</span><span className="ivr-node-copy"><small>{eyebrow}</small><strong>{title}</strong>{description && <span>{description}</span>}</span></button>;
+function Node({ icon, eyebrow, title, description, onClick, onDelete, deleteLabel = "Supprimer ce bloc", selected = false }: { icon: ReactNode; eyebrow: string; title: string; description?: string; onClick(): void; onDelete(): void; deleteLabel?: string; selected?: boolean }) {
+  return <div className={`ivr-node ${selected ? "selected" : ""}`}>
+    <button type="button" className="ivr-node-main" onClick={onClick}><span className="ivr-node-icon">{icon}</span><span className="ivr-node-copy"><small className="sr-only">{eyebrow}</small><strong>{title}</strong>{description && <span>{description}</span>}</span></button>
+    <PopoverButton label={`Options de ${title}`} className="ivr-node-more" trigger={<DotsThree weight="bold"/>}>
+      {close => <><button type="button" role="menuitem" onClick={() => { close(); onClick(); }}><PencilSimple/><span>Modifier ce bloc</span></button><button type="button" role="menuitem" className="ivr-menu-danger" onClick={() => { close(); onDelete(); }}><Trash/><span>{deleteLabel}</span></button></>}
+    </PopoverButton>
+  </div>;
+}
+
+function PopoverButton({ label, trigger, children, className, disabled = false }: { label: string; trigger: ReactNode; children(close: () => void): ReactNode; className: string; disabled?: boolean }) {
+  const id = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const close = () => { popoverRef.current?.hidePopover(); triggerRef.current?.focus({ preventScroll: true }); };
+  return <>
+    <button ref={triggerRef} type="button" className={className} aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} popoverTarget={id} disabled={disabled}>{trigger}</button>
+    <div id={id} ref={popoverRef} popover="auto" role="menu" aria-label={label} className="ivr-popover" onToggle={event => {
+      const visible = event.newState === "open";
+      setOpen(visible);
+      if (!visible || !triggerRef.current || !popoverRef.current) return;
+      const rect = triggerRef.current.getBoundingClientRect(), panel = popoverRef.current;
+      const rightFits = rect.right + panel.offsetWidth + 20 <= window.innerWidth;
+      const leftFits = rect.left - panel.offsetWidth - 20 >= 0;
+      const left = rightFits ? rect.right + 8 : leftFits ? rect.left - panel.offsetWidth - 8 : rect.left;
+      const top = rightFits || leftFits ? rect.top : rect.bottom + panel.offsetHeight + 20 <= window.innerHeight ? rect.bottom + 8 : rect.top - panel.offsetHeight - 8;
+      panel.style.left = `${Math.max(12, Math.min(left, window.innerWidth - panel.offsetWidth - 12))}px`;
+      panel.style.top = `${Math.max(12, Math.min(top, window.innerHeight - panel.offsetHeight - 12))}px`;
+      panel.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+    }} onKeyDown={event => {
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+      const index = items.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus({ preventScroll: true });
+    }}>{children(close)}</div>
+  </>;
+}
+
+function ActionMenu({ label, caption, canAddMenu, disabled = false, onChoose }: { label: string; caption: string; canAddMenu: boolean; disabled?: boolean; onChoose(kind: ActionKind): void }) {
+  const choices: { kind: ActionKind; title: string; description: string; icon: ReactNode }[] = [
+    { kind: "menu", title: "Menu à touches", description: "Proposer un nouveau niveau de choix.", icon: <GitBranch/> },
+    { kind: "number", title: "Transférer l’appel", description: "Faire sonner un numéro de téléphone.", icon: <Phone/> },
+    { kind: "queue", title: "Agent ou équipe", description: "Diriger l’appel vers une file d’attente.", icon: <Headset/> },
+    { kind: "voicemail", title: "Messagerie vocale", description: "Permettre à l’appelant de laisser un message.", icon: <Voicemail/> },
+    { kind: "hangup", title: "Raccrocher", description: "Terminer l’appel.", icon: <PhoneDisconnect/> },
+  ];
+  return <PopoverButton label={label} className="ivr-add-point" disabled={disabled} trigger={<><span><Plus/></span>{caption}</>}>
+    {close => <><p className="ivr-popover-title">Choisir une action</p>{choices.map(choice => <button type="button" role="menuitem" key={choice.kind} disabled={choice.kind === "menu" && !canAddMenu} onClick={() => { close(); onChoose(choice.kind); }}>{choice.icon}<span><strong>{choice.title}</strong><small>{choice.kind === "menu" && !canAddMenu ? "Limite de 12 menus atteinte." : choice.description}</small></span></button>)}</>}
+  </PopoverButton>;
 }
 
 function DestinationPicker({ value, queues, localIds, members, menus, onChange, onNewMenu, canAddMenu, onNewQueue, onEditQueue, onOpenMenu }: {
@@ -256,7 +367,7 @@ function DestinationPicker({ value, queues, localIds, members, menus, onChange, 
     {(kind === "agent" || kind === "queue") && currentQueue && localIds.includes(currentQueue.id) && <details className="ivr-details"><summary>Attente et débordement</summary><label className="field-label">Attente maximale (secondes)<input type="number" min={15} max={3600} value={currentQueue.config.maxWaitSeconds} onChange={event => onEditQueue(currentQueue.id, { maxWaitSeconds: Number(event.target.value) })}/></label><label className="field-label">Sonnerie par agent (secondes)<input type="number" min={5} max={60} value={currentQueue.config.ringTimeout} onChange={event => onEditQueue(currentQueue.id, { ringTimeout: Number(event.target.value) })}/></label><p className="ivr-help">Sans agent disponible à la fin de l’attente, l’appel passe en messagerie. Les annonces et le débordement se règlent aussi dans Files d’attente.</p></details>}
     {value.type === "number" && <label className="field-label">Numéro de destination<input type="tel" autoFocus placeholder="+33123456789" value={value.number} onChange={event => onChange({ type: "number", number: event.target.value.replace(/[\s().-]/g, "") })}/><small>Utilisez le format international avec +.</small></label>}
     {value.type === "menu" && <><button type="button" className="button button-secondary" onClick={() => onOpenMenu(value.menuId)}>Modifier les choix<ArrowRight/></button><label className="field-label">Menu de destination<select value={value.menuId} onChange={event => onChange({ type: "menu", menuId: event.target.value })}>{menus.map(menu => <option key={menu.id} value={menu.id}>{menu.name}</option>)}</select></label></>}
-    {value.type === "voicemail" && <p className="ivr-help">L’appelant laisse un message. Vous le retrouvez dans Messages vocaux.</p>}
+    {value.type === "voicemail" && <p className="ivr-help">Messages disponibles dans Messages vocaux.</p>}
     {value.type === "hangup" && <p className="ivr-help">Un message d’au revoir est lu, puis l’appel se termine.</p>}
   </div>;
 }

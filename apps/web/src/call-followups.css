@@ -20,7 +20,7 @@
 .call-wrapup-note { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.7; margin-top: 14px; }
 .call-dialog.has-actions { max-width: 460px; width: min(460px, calc(100vw - 32px)); }
 .call-dialog.has-actions.has-transcript { max-width: 1010px; width: min(1010px, calc(100vw - 32px)); }
-.has-actions.has-transcript .call-dialog-layout { grid-template-columns: minmax(300px, 1fr) minmax(0, 1.1fr); }
+.has-actions.has-transcript .call-dialog-layout { grid-template-columns: minmax(280px, .7fr) minmax(0, 1.3fr); }
 .has-actions.has-transcript .call-console { justify-content: flex-start; }
 .has-actions .call-controls { position: sticky; top: 0; z-index: 2; padding: 8px 0; background: #fff; }
 .followups-page { padding: 30px; overflow: auto; flex: 1; min-height: 0; }

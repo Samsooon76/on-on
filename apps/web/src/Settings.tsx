@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { CheckCircle, Code, DeviceMobile, GearSix, Microphone, Monitor, Phone, Plug, Plus, SignOut, Tag, UserCircle } from "@phosphor-icons/react";
+import { CheckCircle, Code, DeviceMobile, Microphone, Monitor, Phone, Plug, Plus, SignOut, Tag, UserCircle } from "@phosphor-icons/react";
 import type { ServiceStatus } from "@onoff/contracts";
 import { ApiIntegrations } from "./ApiIntegrations";
 import { McpIntegrations } from "./McpIntegrations";
@@ -80,7 +80,6 @@ export function Settings(props: Props) {
   }
 
   return <section className="settings-page">
-    <div className="section-intro settings-intro"><div><span className="settings-eyebrow"><GearSix size={15} />Réglages de votre espace</span><h2>Votre espace de travail</h2><p>Gérez votre compte, vos lignes, vos appareils et vos intégrations.</p></div></div>
     <div className="section-tabs settings-tabs" role="tablist" aria-label="Rubriques des réglages">
       {settingsTabs.map((id) => {
         const { label, icon: Icon } = tabDetails[id];
@@ -92,13 +91,11 @@ export function Settings(props: Props) {
 
     {panel("account", <section className="settings-section">
       <h3>Mon compte</h3>
-      <p className="settings-description">Votre compte et votre rôle dans l’espace {organizationName}.</p>
       <div className="account-row"><Avatar name={email ?? "Moi"} /><div><b>{email ?? "Mon compte"}</b><p>{organizationName} · {isAdmin ? "Administrateur" : "Membre de l’équipe"}</p></div><button type="button" className="button button-secondary" disabled={disabledActions.signOut} onClick={onSignOut}><SignOut size={17} />Se déconnecter</button></div>
     </section>)}
 
     {panel("lines", <section className="settings-section">
       <div className="settings-section-heading"><h3>Mes lignes</h3>{isAdmin && <button type="button" className="text-button" disabled={disabledActions.purchase} onClick={onPurchase}><Plus size={16} />Ajouter une ligne</button>}</div>
-      <p className="settings-description">Choisissez la ligne à utiliser pour vos appels et vos SMS.</p>
       {assignedLines.map((item) => <div className="settings-line-row" key={item.lines.id}>
         <Phone size={21} /><div><b>{formatPhone(item.lines.phone_number)}</b><p>{services?.voiceEnabled && !services.operationsPaused && item.can_voice && item.lines.voice_enabled ? "Appels activés" : "Appels indisponibles"} · {services?.smsEnabled && !services.operationsPaused && item.can_sms && item.lines.sms_enabled ? "SMS activés" : "SMS indisponibles"}</p></div>
         {item.lines.id === activeLineId ? <span className="selected-line"><CheckCircle size={16} />Sélectionnée</span> : <button type="button" className="button button-secondary" disabled={disabledActions.lines} onClick={() => onSelectLine(item.lines.id)}>Utiliser cette ligne</button>}
@@ -109,14 +106,13 @@ export function Settings(props: Props) {
     {panel("devices", <>
       <section className="settings-section">
         <div className="settings-section-heading"><h3>Appareils connectés</h3><span>{activeDeviceCount} actif{activeDeviceCount > 1 ? "s" : ""}</span></div>
-        <p className="settings-description">Gérez les appareils autorisés à utiliser votre compte.</p>
         {devices.map((device) => <div className="device-row" key={device.id}>
           <span className="device-icon">{device.platform === "web" ? <Monitor /> : <DeviceMobile />}</span><div><b>{device.label || device.platform}</b><p>{device.status === "active" ? "Actif" : "Révoqué"}{device.last_active_at ? ` · ${new Date(device.last_active_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : ""}</p></div>
           {device.status === "active" && <button type="button" className="text-button danger-text" disabled={disabledActions.devices} onClick={() => onRevokeDevice(device.id)}>Révoquer</button>}
         </div>)}
         {!devices.length && <EmptyState icon={<Monitor size={26} />} title="Aucun appareil enregistré"><p>Votre navigateur sera associé lors de l’activation des appels.</p></EmptyState>}
       </section>
-      <section className="settings-section"><h3>État des appels</h3><p className="voice-settings-status" role="status"><Microphone size={17} />{voiceStatus}</p>{canReconnect && <button type="button" className="text-button" disabled={disabledActions.reconnect} onClick={onReconnect}>Reconnecter cet appareil</button>}<p className="settings-description">Un seul onglet reçoit vos appels à la fois. Si vous le fermez, un autre onglet ouvert prend le relais.</p></section>
+      <section className="settings-section"><h3>État des appels</h3><p className="voice-settings-status" role="status"><Microphone size={17} />{voiceStatus}</p>{canReconnect && <button type="button" className="text-button" disabled={disabledActions.reconnect} onClick={onReconnect}>Reconnecter cet appareil</button>}<p className="settings-description">Un seul onglet reçoit les appels ; un autre prend le relais à sa fermeture.</p></section>
     </>)}
 
     {panel("tags", organizationId ? <TagManager api={api} organizationId={organizationId} /> : <EmptyState icon={<Tag size={26} />} title="Aucun espace sélectionné"><p>Sélectionnez un espace pour gérer ses tags.</p></EmptyState>)}

@@ -53,20 +53,20 @@ export function McpIntegrations({ api, initialDraftId = "" }: { api: Api; initia
   }
   return <section className="settings-section mcp-integrations">
     <div className="settings-section-heading"><h3><Plug size={20}/>Assistants IA</h3><button className="text-button" disabled={loading || busy} onClick={() => void load()}><ArrowClockwise size={16}/>Actualiser</button></div>
-    <p className="settings-description">Connectez votre assistant à Onoff. Vous choisissez les données accessibles ; chaque SMS doit être validé ici avant son envoi.</p>
     {error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="mcp-notice" role="status">{notice}</p>}
     {loading && <p role="status">Chargement des intégrations…</p>}
     {config && !config.enabled && <p className="settings-description">Les intégrations IA ne sont pas encore activées sur cet environnement.</p>}
     {config?.enabled && <>
       <div className="mcp-endpoint"><label className="field-label">Adresse du connecteur MCP<input readOnly value={config.endpoint} aria-label="Adresse du connecteur MCP"/></label><button className="button button-secondary" onClick={() => void navigator.clipboard.writeText(config.endpoint).then(() => setNotice("Adresse copiée.")).catch(() => setError("La copie est indisponible. Sélectionnez l’adresse pour la copier."))}><Copy size={17}/>Copier</button></div>
-      <p className="settings-description">Ajoutez cette adresse dans les connexions MCP de votre assistant, puis connectez-vous à Onoff pour choisir l’organisation, les lignes et les permissions. Les données consultées seront transmises à cet assistant.</p>
+      <p className="settings-description">Ajoutez cette adresse aux connexions MCP de votre assistant. Les données autorisées lui seront transmises.</p>
       <h4>Connexions autorisées</h4>
       {!loading && !grants.length && <p className="settings-description">Aucun assistant connecté.</p>}
       {grants.map(grant => <article className="mcp-connection" key={grant.id}><div><b>{grant.client_name}</b><p>{grant.line_ids.length} ligne(s) sélectionnée(s) · {grant.last_used_at ? `Dernière utilisation : ${new Date(grant.last_used_at).toLocaleString("fr-FR")}` : "Pas encore utilisé"}</p><ul>{grant.permissions.map(permission => <li key={permission}>{mcpPermissionLabels[permission]}</li>)}</ul></div><button className="text-button danger-text" disabled={busy} onClick={() => void revoke(grant)}>Révoquer</button></article>)}
       <h4>SMS proposés par vos assistants</h4>
+      <p className="settings-description">Chaque SMS nécessite votre validation avant envoi.</p>
       {!loading && !drafts.length && <p className="settings-description">Aucun SMS à examiner.</p>}
       {drafts.map(draft => <button className="mcp-draft-row" key={draft.id} onClick={() => setDraftId(draft.id)}><div><b>{draft.destination}</b><p>{draft.body}</p><span>{stateText(draft)}</span></div><ArrowRight size={18}/></button>)}
-      {partial && <p className="settings-description">Les 50 propositions les plus récentes sont affichées. Un lien de validation permet aussi d’ouvrir une proposition plus ancienne.</p>}
+      {partial && <p className="settings-description">50 dernières propositions. Les plus anciennes restent accessibles par leur lien de validation.</p>}
     </>}
     {draftId && config?.enabled && <SmsApproval api={api} id={draftId} onChanged={() => void load()} onClose={() => { setDraftId(""); const url = new URL(window.location.href); url.searchParams.delete("mcpSms"); window.history.replaceState(null, "", url); }}/>}
   </section>;
@@ -97,7 +97,7 @@ export function SmsApproval({ api, id, onClose, onChanged }: { api: Api; id: str
     {error && <p className="form-error" role="alert">{error}</p>}
     {!draft && !error && <p role="status">Chargement du SMS…</p>}
     {draft && <>
-      <p>Proposé par <b>{draft.clientName}</b>. Vérifiez le destinataire, la ligne et le texte avant d’autoriser l’envoi.</p>
+      <p>Proposé par <b>{draft.clientName}</b>.</p>
       <dl><div><dt>Destinataire</dt><dd>{draft.destination}</dd></div><div><dt>Depuis votre ligne</dt><dd>{draft.lineNumber}</dd></div></dl>
       <div className="mcp-message">{draft.body}</div>
       <p className="settings-description">{segments.segments} segment(s) estimé(s) · {segments.encoding} · Validation valable jusqu’au {new Date(draft.expires_at).toLocaleString("fr-FR")}. La facturation habituelle de la ligne s’applique.</p>

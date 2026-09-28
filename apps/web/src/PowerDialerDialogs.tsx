@@ -43,7 +43,7 @@ export function CsvImport({ existing, excluded, onClose, onAdd }: { existing: st
     finally { if (version === request.current) setReading(false); }
   }
   return <Modal title="Importer une liste CSV" className="pd-import-modal" onClose={onClose}>
-    <p className="pd-modal-description">Ajoutez jusqu’à 1 000 numéros par campagne. Vérifiez les colonnes et l’aperçu avant l’import. Les contacts restent dans cette campagne.</p>
+    <p className="pd-modal-description">1 000 numéros maximum, ajoutés uniquement à cette campagne.</p>
     <label className="pd-upload" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void readFile(event.dataTransfer.files[0]); }}>
       <UploadSimple size={27} /><strong>{reading ? "Lecture du fichier…" : filename || "Choisir ou glisser un fichier CSV"}</strong><span>CSV UTF-8 · virgule, point-virgule ou tabulation · 2 Mo max.</span>
       <input type="file" accept=".csv,text/csv,text/tab-separated-values" aria-label="Fichier CSV" onChange={(event) => { void readFile(event.target.files?.[0]); event.target.value = ""; }} />

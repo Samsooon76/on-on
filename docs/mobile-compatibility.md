@@ -1,5 +1,11 @@
 # Compatibilité mobile vérifiée
 
+## Lancement autonome sur iPhone — 27 septembre 2026
+
+La commande `ios:personal` produit désormais une version **Release** par défaut. Le code JavaScript est embarqué dans l'app et `--no-bundler` évite de démarrer un serveur de développement pour son utilisation. L'option `--dev` conserve le mode Debug avec Metro pour le développement.
+
+Validation : compilation native Release réussie (zéro erreur), bundle `main.jsbundle` présent avec l'URL de l'API Railway et installation puis lancement direct confirmés sur l'iPhone physique via `xcrun devicectl`. L'installateur Expo est resté bloqué sur la connexion à l'appareil ; l'installation a été terminée avec l'outil Apple à partir du binaire compilé. Les autorisations APNs du projet ont été rétablies après compilation. Un essai utilisateur en 4G/5G reste à confirmer. Cette version personnelle ne reçoit pas les appels entrants et n'inclut pas encore les mises à jour EAS Update.
+
 ## Design iOS aligné sur le web — 26 septembre 2026
 
 Les écrans partagent désormais le fond blanc, le vert `#246653` et les surfaces neutres du web. La typographie système utilise des graisses plus légères, avec des titres de 28 pt et des contrôles aux arrondis de 8–12 pt. Les filtres sont soulignés, les avatars sont discrets et le clavier rejoint l’alignement de la barre de navigation. Les conversations, formulaires, réglages et le clavier utilisent ces mêmes styles.
@@ -52,7 +58,7 @@ L'hôte n'a pas Xcode complet (seuls les Command Line Tools sont sélectionnés)
 
 ## Push et essais réels requis
 
-### Aperçu sur iPhone avec une équipe Apple personnelle
+### Version autonome sur iPhone avec une équipe Apple personnelle
 
 Une équipe Apple personnelle ne peut pas signer la capacité Push Notifications demandée par le plugin Twilio. Pour installer l'app et parcourir les écrans sur un iPhone branché au Mac, lancer depuis la racine du dépôt avec Node 24.21.0 :
 
@@ -60,7 +66,13 @@ Une équipe Apple personnelle ne peut pas signer la capacité Push Notifications
 pnpm --filter @onoff/mobile ios:personal
 ```
 
-La commande retire temporairement `aps-environment`, démarre Metro, compile et installe l'app. Garder le terminal ouvert pendant l'essai ; `Ctrl-C` rétablit le fichier iOS d'origine. Elle désactive aussi l'enregistrement PushKit et l'inscription aux appels entrants dans ce seul aperçu ; les appels sortants restent disponibles si le serveur et la ligne sont configurés. Le téléphone doit avoir le mode développeur activé et le projet Xcode doit être signé avec l'équipe personnelle. Pour les appels entrants et une distribution iOS, utiliser un compte Apple Developer avec les capacités APNs/VoIP et les credentials Twilio correspondants.
+La commande retire temporairement `aps-environment`, compile en **Release** avec le code JavaScript embarqué et installe l'app, puis rétablit le fichier iOS d'origine. L'app s'ouvre directement depuis son icône, sans URL ni serveur Metro : le Mac peut être éteint, et une connexion 4G/5G ou Wi-Fi suffit pour accéder à l'API Railway configurée dans `apps/mobile/.env`. Une nouvelle installation est nécessaire pour mettre à jour le code mobile tant qu'EAS Update n'est pas configuré.
+
+Pour travailler avec le rechargement à chaud, utiliser `pnpm --filter @onoff/mobile ios:personal --dev`. Ce mode démarre Metro et requiert de garder le terminal ouvert pendant l'essai ; `Ctrl-C` rétablit le fichier iOS d'origine. Les deux modes acceptent le nom ou l'identifiant de l'iPhone en argument.
+
+La signature avec l'équipe personnelle désactive l'enregistrement PushKit et l'inscription aux appels entrants dans ces versions ; les appels sortants restent disponibles si le serveur et la ligne sont configurés. Le téléphone doit avoir le mode développeur activé et le projet Xcode doit être signé avec l'équipe personnelle. Pour les appels entrants et une distribution iOS, utiliser un compte Apple Developer avec les capacités APNs/VoIP et les credentials Twilio correspondants.
+
+Les profils de signature d'une équipe Apple personnelle expirent après sept jours : il faut alors réinstaller l'app. Pour une distribution via TestFlight, un compte Apple Developer Program est nécessaire. Voir les [limites officielles du compte personnel](https://developer.apple.com/help/account/basics/about-your-developer-account).
 
 - iOS : compte Apple Developer, Team ID, signature, App ID avec Push Notifications, entitlement PushKit/VoIP et credential APNs Twilio correspondant à l'environnement. Les profils EAS développement et démo sélectionnent les environnements APNs development et production.
 - Android : projet Firebase, `google-services.json` privé correspondant au package, FCM activé et credential FCM Twilio. Fournir son chemin via `GOOGLE_SERVICES_FILE`; ne pas versionner le fichier.
