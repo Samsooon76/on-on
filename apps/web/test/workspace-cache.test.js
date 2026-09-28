@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSnapshot } from "@onoff/api-client";
-import { ThreadCache, mergeById } from "../src/thread-cache.ts";
-import { clearWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot, snapshotSignature } from "../src/workspace-snapshot.ts";
+import { ThreadCache, continuesThread, mergeById } from "../src/thread-cache.ts";
+import { clearOtherWorkspaceSnapshots, clearWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot, snapshotSignature } from "../src/workspace-snapshot.ts";
 
 const message = (id, status = "received") => ({ id, direction: "inbound", body: id, status, provider_error_code: null, created_at: "2026-09-28T09:00:00Z", sent_at: null, delivered_at: null });
 
@@ -34,7 +34,14 @@ test("fresh records replace cached ones with the same id and older cached pages 
 function memoryStorage({ failing = false } = {}) {
   const values = new Map();
   const guard = () => { if (failing) throw new DOMException("blocked", "SecurityError"); };
-  return { values, getItem: (key) => { guard(); return values.get(key) ?? null; }, setItem: (key, value) => { guard(); values.set(key, value); }, removeItem: (key) => { guard(); values.delete(key); } };
+  return {
+    values,
+    get length() { guard(); return values.size; },
+    key: (index) => { guard(); return [...values.keys()][index] ?? null; },
+    getItem: (key) => { guard(); return values.get(key) ?? null; },
+    setItem: (key, value) => { guard(); values.set(key, value); },
+    removeItem: (key) => { guard(); values.delete(key); },
+  };
 }
 const conversation = { id: "conversation-1", lineId: "line-1", remoteNumber: "+33600000001", remoteContactName: "Alice", lastMessageAt: "2026-09-28T09:00:00Z", lastMessage: { id: "m1", body: "Bonjour", direction: "inbound", status: "received", created_at: "2026-09-28T09:00:00Z" }, unread: true };
 const snapshot = (overrides = {}) => createSnapshot({ userId: "user-1", organizationId: "org-1", lineId: "line-1", organizations: [{ organization_id: "org-1" }], lines: [{ can_sms: true, lines: { id: "line-1" } }], conversations: [conversation], calls: [], ...overrides });
@@ -65,4 +72,42 @@ test("identical inbox content has the same signature whenever it was written", (
   const later = { ...snapshot(), savedAt: first.savedAt + 60_000 };
   assert.equal(snapshotSignature(first), snapshotSignature(later));
   assert.notEqual(snapshotSignature(first), snapshotSignature(snapshot({ conversations: [{ ...conversation, unread: false }] })));
+});
+
+test("an unreadable or expired snapshot is deleted instead of staying on the device", () => {
+  const storage = memoryStorage();
+  const key = `onoff.workspace.v1.user-1`;
+  storage.setItem(key, "{not json");
+  assert.equal(loadWorkspaceSnapshot("user-1", storage), null);
+  assert.equal(storage.values.has(key), false, "damaged content is removed");
+
+  saveWorkspaceSnapshot(snapshot(), storage);
+  const later = Date.now() + 8 * 24 * 60 * 60 * 1000;
+  assert.equal(loadWorkspaceSnapshot("user-1", storage, later), null);
+  assert.equal(storage.values.has(key), false, "an expired snapshot is removed");
+
+  saveWorkspaceSnapshot(snapshot(), storage);
+  assert.ok(loadWorkspaceSnapshot("user-1", storage));
+  assert.equal(storage.values.has(key), true, "a valid snapshot stays");
+});
+
+test("signing in removes the inboxes of other accounts and older formats, and nothing else", () => {
+  const storage = memoryStorage();
+  saveWorkspaceSnapshot(snapshot(), storage);
+  storage.setItem("onoff.workspace.v1.someone-else", "{}");
+  storage.setItem("onoff.workspace.v0.user-1", "{}");
+  storage.setItem("onoff:powerdialer:v2:user-1:org:line", "keep");
+  storage.setItem("sb-project-auth-token", "keep");
+  clearOtherWorkspaceSnapshots("user-1", storage);
+  assert.deepEqual([...storage.values.keys()].sort(), ["onoff.workspace.v1.user-1", "onoff:powerdialer:v2:user-1:org:line", "sb-project-auth-token"]);
+  assert.doesNotThrow(() => clearOtherWorkspaceSnapshots("user-1", memoryStorage({ failing: true })));
+  assert.doesNotThrow(() => clearOtherWorkspaceSnapshots("user-1", null));
+});
+
+test("a cached thread is merged only when the fresh page continues it", () => {
+  const ids = (...values) => values.map((id) => ({ id }));
+  assert.equal(continuesThread(ids("m1", "m2"), ids("m2", "m3"), "older"), true, "overlap");
+  assert.equal(continuesThread(ids("m1", "m2"), ids("m3", "m4"), null), true, "the fresh page is the whole history");
+  assert.equal(continuesThread(ids("m1", "m2"), ids("m3", "m4"), "older"), false, "a gap of unseen messages");
+  assert.equal(continuesThread([], ids("m1"), "older"), false, "nothing cached");
 });

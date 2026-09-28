@@ -29,17 +29,20 @@ security invoker
 set search_path = ''
 as $function$
   select latest.conversation_id, latest.id, latest.body, latest.direction, latest.status, latest.created_at
-  from public.conversations c
+  from (select distinct wanted.id from unnest(coalesce(p_conversation_ids, array[]::uuid[])) as wanted(id)) wanted
+  -- Reach each conversation by its key and each latest message through the (conversation, time) index,
+  -- so the cost follows the number of ids asked for, not the size of the line or of a thread.
+  cross join lateral (
+    select c.id from public.conversations c
+    where c.id = wanted.id and c.line_id = p_line_id
+  ) c
   cross join lateral (
     select m.conversation_id, m.id, m.body, m.direction, m.status, m.created_at
     from public.messages m
-    where m.organization_id = c.organization_id
-      and m.conversation_id = c.id
+    where m.conversation_id = c.id
     order by m.created_at desc, m.id desc
     limit 1
   ) latest
-  where c.line_id = p_line_id
-    and c.id = any(coalesce(p_conversation_ids, array[]::uuid[]))
   order by latest.conversation_id;
 $function$;
 
@@ -176,12 +179,13 @@ as $function$
     select * from public.assigned_line_scope(p_line_id, 'sms')
   ),
   fetched as (
+    -- Filter on the parameter, not on a join with `scope`: the line then stays an index condition
+    -- and only one page is read. `scope` still decides who may read (no scope, no organization, no row).
     select c.id, c.organization_id, c.line_id, c.remote_number, c.last_message_at
-    from scope
-    join public.conversations c
-      on c.organization_id = scope.organization_id
-     and c.line_id = scope.line_id
-    where c.last_message_at is not null
+    from public.conversations c
+    where c.line_id = p_line_id
+      and c.organization_id = (select organization_id from scope)
+      and c.last_message_at is not null
       and (
         p_cursor_at is null
         or c.last_message_at < p_cursor_at
@@ -251,11 +255,10 @@ as $function$
   fetched as (
     select c.id, c.organization_id, c.line_id, c.direction, c.remote_number, c.status,
            c.started_at, c.answered_at, c.ended_at, c.duration_seconds, c.created_at
-    from scope
-    join public.calls c
-      on c.organization_id = scope.organization_id
-     and c.line_id = scope.line_id
-    where (
+    from public.calls c
+    where c.line_id = p_line_id
+      and c.organization_id = (select organization_id from scope)
+      and (
         p_cursor_at is null
         or c.created_at < p_cursor_at
         or (c.created_at = p_cursor_at and c.id < p_cursor_id)
@@ -323,11 +326,10 @@ as $function$
   fetched as (
     select m.id, m.conversation_id, m.direction, m.body, m.status, m.provider_error_code,
            m.created_at, m.sent_at, m.delivered_at
-    from scope
-    join public.messages m
-      on m.organization_id = scope.organization_id
-     and m.conversation_id = scope.id
-    where (
+    from public.messages m
+    where m.conversation_id = p_conversation_id
+      and exists (select 1 from scope)
+      and (
         p_cursor_at is null
         or m.created_at < p_cursor_at
         or (m.created_at = p_cursor_at and m.id < p_cursor_id)

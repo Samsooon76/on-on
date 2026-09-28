@@ -19,8 +19,8 @@ import { normalizePhoneNumber, type ServiceStatus } from "@onoff/contracts";
 import { useContacts } from "./useContacts";
 import { editedContactPhones } from "./contact-model";
 import { ApiClientError, createApiClient, createSnapshot, getSmsSegmentInfo } from "@onoff/api-client";
-import { clearWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot, snapshotSignature } from "./workspace-snapshot";
-import { ThreadCache, mergeById } from "./thread-cache";
+import { clearOtherWorkspaceSnapshots, clearWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot, snapshotSignature } from "./workspace-snapshot";
+import { ThreadCache, continuesThread, mergeById } from "./thread-cache";
 import { createVoiceClient, type VoiceEvent } from "@onoff/voice-web";
 import type { VoiceClient } from "@onoff/voice-contract";
 
@@ -554,6 +554,11 @@ export default function App() {
     await refreshWorkspace(pending.organization_id, pending.line_id);
     if (!isCurrent()) return;
     setSelectedLineId(pending.line_id);
+    if (pending.conversation_id !== selectedConversationIdRef.current) {
+      loadedConversationId.current = "";
+      setConversationMessages([]);
+      setMessagesCursor(null);
+    }
     setSelectedConversationId(pending.conversation_id);
     setActiveTab("conversations");
     setNotice("Un SMS précédent attend une vérification. Reprenez-la avant tout nouvel envoi.");
@@ -577,6 +582,7 @@ export default function App() {
     const userId = session?.user.id ?? "";
     if (userId && hydratedUser.current !== userId) {
       hydratedUser.current = userId;
+      clearOtherWorkspaceSnapshots(userId);
       rememberedSelection.current = { organizationId: "", lineId: "" };
       const snapshot = workspaceSelection.current.organizationId ? null : loadWorkspaceSnapshot<Organization, LineAssignment>(userId);
       if (snapshot) {
@@ -668,7 +674,7 @@ export default function App() {
   useEffect(() => {
     const userId = session?.user.id;
     if (!userId || workspaceState !== "ready" || !selectedOrg) return;
-    if (!activeLine) { if (lines.every((item) => !item.lines)) clearWorkspaceSnapshot(userId); return; }
+    if (!activeLine) { if (!workspaceSelection.current.lineId && lines.every((item) => !item.lines)) clearWorkspaceSnapshot(userId); return; }
     const timer = window.setTimeout(() => {
       const snapshot = createSnapshot({ userId, organizationId: selectedOrg, lineId: activeLine.id, organizations, lines, conversations, calls });
       const signature = snapshotSignature(snapshot);
@@ -705,9 +711,11 @@ export default function App() {
     void api<{ items: MessageRecord[]; nextCursor: string | null }>(`/v1/conversations/${conversationId}/messages?limit=50`)
       .then(async ({ items, nextCursor }) => {
         if (disposed) return;
-        // Older pages already loaded stay visible and fresh records win on overlap.
-        setConversationMessages((current) => mergeById(current, items));
-        setMessagesCursor(cached ? cached.cursor : nextCursor);
+        // Older pages already loaded stay visible when this page continues them; after a long absence
+        // it replaces them, or the messages in between would be missing and out of reach.
+        const continues = Boolean(cached) && continuesThread(cached!.messages, items, nextCursor);
+        setConversationMessages((current) => continues ? mergeById(current, items) : items);
+        setMessagesCursor(continues ? cached!.cursor : nextCursor);
         setMessagesState("ready");
         loadedConversationId.current = conversationId;
         if (document.visibilityState === "visible") {

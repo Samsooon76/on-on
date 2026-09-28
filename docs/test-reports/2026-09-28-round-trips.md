@@ -38,14 +38,24 @@ Données synthétiques dans PGlite (Postgres compilé en WASM : ordres de grande
 | `latest_conversation_messages` (51 conversations) | 12,5 → 14,4 → 36,9 ms | 2,5 → 2,3 → 2,5 ms |
 | `list_line_conversations` (page de 30) | — | 12 → 15 ms pour 250 conversations; 15,8 ms pour 2 000 |
 
+Ligne extrême (60 000 conversations, 180 000 appels, un fil de 20 000 messages), mêmes outils :
+
+| Fonction | Ancien code | Après |
+|---|---|---|
+| Dernier message de 31 conversations | 93 ms | 2,3 ms |
+| Historique d'appels (page de 30) | — | 1,8 ms (81 ms avant correction de la relecture) |
+| Fil (page de 50) | 1,8 ms (requête isolée) | 2,9 ms (53 ms avant correction de la relecture) |
+| Liste des conversations (page de 30) | ~120 ms (dernier message + non-lus) | 30 ms, dont 26 ms de non-lus (fonction existante non modifiée) |
+
 `list_pending_outbound_messages` relisait tous les messages des lignes de l'utilisateur : la jointure `message.id::text = …` n'est pas indexable. Les réécritures gardent signature et résultats; les tests SQL comparent les deux implémentations sur le même jeu de données.
 
 ## Vérifications
 
-- API : 166 tests, dont l'authentification avec une vraie paire de clés ES256 (jeton falsifié, expiré, rôle ou audience incorrects, anonyme, jeton symétrique historique, JWKS indisponible, écritures qui gardent l'appel à Auth), les routes réécrites (un seul appel base par écran, 404 sans droit, 503 sur erreur ou réponse inattendue) et un test d'intégration où l'API réelle appelle les vraies fonctions SQL (pagination sans trou ni répétition, précision à la microseconde, isolation entre organisations, état de lecture). Sans l'arrondi corrigé du curseur, ce test échoue : une conversation était sautée à la limite de deux pages.
+- API : 167 tests, dont l'authentification avec une vraie paire de clés ES256 (jeton falsifié, expiré, rôle ou audience incorrects, anonyme, jeton symétrique historique, JWKS indisponible, écritures qui gardent l'appel à Auth), les routes réécrites (un seul appel base par écran, 404 sans droit, 503 sur erreur ou réponse inattendue) et un test d'intégration où l'API réelle appelle les vraies fonctions SQL (pagination sans trou ni répétition, précision à la microseconde, isolation entre organisations, état de lecture). Sans l'arrondi corrigé du curseur, ce test échoue : une conversation était sautée à la limite de deux pages.
+- Relecture indépendante (API, SQL, statistiques, web) : aucun bloquant. Corrigé à sa suite : lectures via clé de service qui acceptaient une session révoquée (la vérification locale est limitée à une liste de routes protégées par la RLS seule), refus à tort d'un jeton valide quand le point de clés répondait 403/429, identifiants d'utilisateur non v4, plans SQL en parcours de toute la ligne, fil mis en cache pouvant masquer des messages après une longue absence (Web et iOS), fil d'un autre SMS pouvant être mémorisé sous la conversation reprise, clichés locaux jamais purgés s'ils étaient illisibles ou d'un autre compte. Non traités : sept jours maximum de validité des jetons à confirmer dans Supabase, plafond des statistiques vers 8 000 appels, rechargements superflus après hydratation quand l'organisation change.
 - SQL : `supabase/tests/conversation_loading.test.sql` (équivalence avec les anciennes fonctions, portée d'accès pour sept profils dont membre suspendu et affectation révoquée, règles explicites sans RLS, pagination avec égalité d'horodatage, état de lecture propre à chaque utilisateur). Sept mutations volontaires de la migration ont été introduites : six sont détectées, la septième est équivalente (la clé étrangère composite garantit déjà la cohérence d'organisation).
-- iOS : 42 tests (17 nouveaux : cache des fils, chargement progressif, stockage du dernier état dans le trousseau avec écriture interrompue, autre utilisateur, échec du stockage). La logique de `App.tsx` iOS (chargement progressif, rafraîchissements ciblés, dernier état affiché au démarrage) n'a été que typée et relue : elle n'a été exécutée ni sur simulateur ni sur iPhone.
-- Web : 72 tests; navigateur local contre une API simulée (400 ms par appel) :
+- iOS : 43 tests (18 nouveaux : cache des fils, chargement progressif, stockage du dernier état dans le trousseau avec écriture interrompue, autre utilisateur, échec du stockage). La logique de `App.tsx` iOS (chargement progressif, rafraîchissements ciblés, dernier état affiché au démarrage) n'a été que typée et relue : elle n'a été exécutée ni sur simulateur ni sur iPhone.
+- Web : 75 tests; navigateur local contre une API simulée (400 ms par appel) :
   - démarrage à froid : trois niveaux de 400 ms, les appareils ne bloquent plus;
   - avec le dernier état mémorisé (latence simulée de 1,5 s par appel) : boîte et nom de l'organisation affichés à 0,6 s, avant la première réponse de l'API (2,0 s), lignes verrouillées seulement pendant la vérification des SMS en attente;
   - conversations affichées à 1,6 s sans attendre les appareils (3,8 s) ni les appels (4,1 s);

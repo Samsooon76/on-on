@@ -34,7 +34,14 @@ export function useConversationHistory(api: Request, lineId: string, conversatio
     try {
       const page = await api<ApiPage<MessageRecord>>(`/v1/conversations/${conversationId}/messages?limit=50`);
       if (!isCurrent()) return;
-      setHistory((previous) => ({ key, messages: mergeRecords(previous.key === key ? previous.messages : [], page.items), cursor: previous.key === key && previous.messages.length ? previous.cursor : page.nextCursor, state: "ready", loadingOlder: previous.key === key && previous.loadingOlder }));
+      setHistory((previous) => {
+        const shown = previous.key === key ? previous.messages : [];
+        // The fresh page joins what is shown only if it continues it (overlap, or the whole history). After a long
+        // absence it replaces it: merging would leave messages in between that no cursor can reach.
+        const shownIds = new Set(shown.map((item) => item.id));
+        const continues = shown.length > 0 && (page.nextCursor === null || page.items.some((item) => shownIds.has(item.id)));
+        return { key, messages: continues ? mergeRecords(shown, page.items) : page.items, cursor: continues ? previous.cursor : page.nextCursor, state: "ready", loadingOlder: previous.key === key && previous.loadingOlder };
+      });
       const last = page.items.at(-1);
       if (last && AppState.currentState === "active") {
         // A read-receipt failure must not hide successfully loaded messages.

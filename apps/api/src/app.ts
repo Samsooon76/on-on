@@ -7,7 +7,7 @@ import { hasZodFastifySchemaValidationErrors, serializerCompiler, validatorCompi
 import { callIntentCreateSchema, contactCreateSchema, contactUpdateSchema, deviceCreateSchema, lineAssignmentUpdateSchema, messageCreateSchema, normalizePhoneNumber, paginationSchema, uuidSchema, voiceTargetSchema, type Database } from "@onoff/contracts";
 import type { AppConfig } from "./config.js";
 import { requestBodySchemas, responsesForRoute } from "./response-schemas.js";
-import { authenticateBearer } from "./authentication.js";
+import { authenticateBearer, isLocallyVerified } from "./authentication.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
 import { callsPageSchema, callsResponse, inboxPageSchema, inboxResponse, threadPageSchema, threadResponse } from "./history-pages.js";
 import { isActiveOrganizationAdmin } from "./repositories/access.js";
@@ -230,7 +230,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       global: { headers: { Authorization: `Bearer ${match[1]}` } },
     });
-    const userId = await authenticateBearer(userClient, match[1], request.method);
+    const userId = await authenticateBearer(userClient, match[1], isLocallyVerified(request.method, request.routeOptions.url));
     if (!userId) {
       return reply.code(401).send({ code: "unauthorized", message: "Session invalide ou expirée.", requestId: request.id });
     }

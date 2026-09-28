@@ -87,6 +87,7 @@ test("tokens with a bad signature, expiry, role, audience, subject or anonymous 
     "wrong audience": await signer.sign(signer.claims({ aud: "https://example.test/mcp" })),
     "missing subject": await signer.sign(signer.claims({ sub: undefined })),
     "non-UUID subject": await signer.sign(signer.claims({ sub: "someone" })),
+    "malformed UUID subject": await signer.sign(signer.claims({ sub: "11111111-1111-1111-1111-11111111111" })),
     "anonymous sign-in": await signer.sign(signer.claims({ is_anonymous: true })),
     "not a JWT": "not-a-real-token",
   };
@@ -98,6 +99,8 @@ test("tokens with a bad signature, expiry, role, audience, subject or anonymous 
   }
   assert.equal(backend.userChecks(), 0, "definitive refusals never reach Auth");
   assert.equal((await request(app, valid)).statusCode, 200, "the untouched token still works");
+  // Users created by an administrator or imported may not have a random (v4) identifier.
+  assert.equal((await request(app, await signer.sign(signer.claims({ sub: "11111111-1111-1111-1111-111111111111" })))).statusCode, 200);
 });
 
 test("legacy symmetric tokens and unreachable signing keys fall back to the Auth check", async (t) => {
@@ -117,6 +120,14 @@ test("legacy symmetric tokens and unreachable signing keys fall back to the Auth
   t.after(() => outageApp.close());
   assert.equal((await request(outageApp, await signer.sign())).statusCode, 200, "a JWKS outage does not lock users out");
   assert.equal(outage.userChecks(), 1);
+
+  for (const jwksStatus of [401, 403, 404, 429]) {
+    const refusedKeys = createBackend({ jwk: signer.jwk, jwksStatus });
+    const refusedKeysApp = createApp(config, refusedKeys.dependencies);
+    t.after(() => refusedKeysApp.close());
+    assert.equal((await request(refusedKeysApp, await signer.sign())).statusCode, 200, `a ${jwksStatus} from the key endpoint does not lock users out`);
+    assert.equal(refusedKeys.userChecks(), 1, `${jwksStatus}: Auth decides`);
+  }
 
   const refused = createBackend({ jwk: signer.jwk, jwksStatus: 500, userStatus: 401 });
   const refusedApp = createApp(config, refused.dependencies);
@@ -154,6 +165,23 @@ test("requests that change state keep the authoritative Auth check", async (t) =
   t.after(() => revokedApp.close());
   const [method, url, payload] = writes[0];
   assert.equal((await request(revokedApp, token, { method, url, payload })).statusCode, 401, "a signed-out session cannot write");
+});
+
+test("reads outside the row-level-security list keep the authoritative Auth check", async (t) => {
+  const signer = await createSigner();
+  const backend = createBackend({ jwk: signer.jwk });
+  const app = createApp(config, backend.dependencies);
+  t.after(() => app.close());
+  const token = await signer.sign();
+
+  // A GET that is not on the list (here the MCP settings, which use the service-role client elsewhere) asks Auth.
+  assert.equal((await request(app, token, { url: "/v1/mcp/config" })).statusCode, 200);
+  assert.equal(backend.userChecks(), 1);
+  assert.equal(backend.jwksFetches(), 0);
+  // The same token on a listed read is verified locally.
+  assert.equal((await request(app, token, { url: "/v1/services" })).statusCode, 200);
+  assert.equal(backend.userChecks(), 1);
+  assert.equal(backend.jwksFetches(), 1);
 });
 
 test("requests without a usable bearer token never reach Supabase", async (t) => {

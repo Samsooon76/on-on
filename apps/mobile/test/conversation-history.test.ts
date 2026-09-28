@@ -209,3 +209,27 @@ test('the cache is dropped when the signed-in user changes', async () => {
   assert.deepEqual(history!.messages, []);
   await act(async () => root.unmount());
 });
+
+test('a refresh that does not reach the shown messages replaces them so no gap stays out of reach', async () => {
+  const paths: string[] = [];
+  let pages = 0;
+  const api = async (path: string) => {
+    paths.push(path);
+    if (path.endsWith('/read')) return null;
+    if (path.includes('cursor=')) return { items: [message('m5')], nextCursor: null };
+    pages += 1;
+    return pages === 1 ? { items: [message('m1'), message('m2')], nextCursor: 'older-1' } : { items: [message('m10'), message('m11')], nextCursor: 'older-2' };
+  };
+  const onRead = () => {};
+  let history: ReturnType<typeof useConversationHistory>;
+  const Probe = () => { history = useConversationHistory(api, 'line', 'a', true, onRead); return null; };
+  let root: ReturnType<typeof create>;
+  await act(async () => { root = create(createElement(Probe)); });
+  assert.deepEqual(history!.messages.map((item) => item.id), ['m1', 'm2']);
+  await act(async () => history!.refresh());
+  assert.deepEqual(history!.messages.map((item) => item.id), ['m10', 'm11'], 'the older, unconnected messages are dropped');
+  await act(async () => history!.loadOlder());
+  assert.ok(paths.some((path) => path.includes('cursor=older-2')), 'paging continues from the fresh page, not from the stale cursor');
+  assert.ok(!paths.some((path) => path.includes('cursor=older-1')));
+  await act(async () => root.unmount());
+});
