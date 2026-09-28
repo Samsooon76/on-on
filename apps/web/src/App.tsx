@@ -18,7 +18,9 @@ import { buildInbox, formatPhone, phoneKey, type Contact, type CallRecord, type 
 import { normalizePhoneNumber, type ServiceStatus } from "@onoff/contracts";
 import { useContacts } from "./useContacts";
 import { editedContactPhones } from "./contact-model";
-import { ApiClientError, createApiClient, getSmsSegmentInfo } from "@onoff/api-client";
+import { ApiClientError, createApiClient, createSnapshot, getSmsSegmentInfo } from "@onoff/api-client";
+import { clearWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot, snapshotSignature } from "./workspace-snapshot";
+import { ThreadCache, mergeById } from "./thread-cache";
 import { createVoiceClient, type VoiceEvent } from "@onoff/voice-web";
 import type { VoiceClient } from "@onoff/voice-contract";
 
@@ -86,6 +88,12 @@ export default function App() {
   const workspaceSelection = useRef({ organizationId: "", lineId: "" });
   const historyScope = useRef("");
   const historyExpanded = useRef(false);
+  // The last known inbox is shown while the current one loads; reopened threads reuse their messages.
+  const hydratedUser = useRef("");
+  const rememberedSelection = useRef({ organizationId: "", lineId: "" });
+  const lastSnapshot = useRef("");
+  const threadCache = useRef(new ThreadCache());
+  const loadedConversationId = useRef("");
   const smsSubmitting = useRef(false);
   const [activeTab, setActiveTab] = useState<"conversations" | "contacts" | "powerdialer" | "settings" | "admin" | "center" | "statistics" | "followups">(() => settingsTabFromSearch(window.location.search) ? "settings" : "conversations");
   const [calls, setCalls] = useState<CallRecord[]>([]);
@@ -145,6 +153,11 @@ export default function App() {
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       const nextUserId = nextSession?.user.id ?? "";
       if (currentUserId.current && currentUserId.current !== nextUserId) {
+        clearWorkspaceSnapshot(currentUserId.current);
+        threadCache.current.clear();
+        loadedConversationId.current = "";
+        hydratedUser.current = "";
+        lastSnapshot.current = "";
         voiceOwnershipRelease.current?.();
         voiceOwnershipRelease.current = null;
         setVoiceTabOwner(false);
@@ -228,11 +241,13 @@ export default function App() {
     drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody;
     setMessageBody(drafts.current[`${selectedLineId}:${phoneKey(normalized)}`] ?? "");
     setMessageDestination(normalized);
-    setConversationMessages([]);
-    setMessagesCursor(null);
     const smsId = id ?? conversations.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalized))?.id ?? "";
+    const cached = smsId ? threadCache.current.get(smsId) : undefined;
+    loadedConversationId.current = cached ? smsId : "";
+    setConversationMessages(cached?.messages ?? []);
+    setMessagesCursor(cached?.cursor ?? null);
     setSelectedConversationId(smsId);
-    setMessagesState(smsId ? "loading" : "ready");
+    setMessagesState(smsId && !cached ? "loading" : "ready");
     setMessageReload((value) => value + 1);
     setActiveTab("conversations");
     setNewConversationOpen(false);
@@ -359,6 +374,8 @@ export default function App() {
     workspaceRequest.current += 1;
     historyScope.current = "";
     historyExpanded.current = false;
+    threadCache.current.clear();
+    loadedConversationId.current = "";
     drafts.current[`${selectedLineId}:${phoneKey(messageDestination)}`] = messageBody;
     setLines([]);
     setSelectedLineId("");
@@ -475,31 +492,42 @@ export default function App() {
   async function refreshWorkspace(orgId = selectedOrg, preferredLineId = selectedLineId) {
     if (!orgId) return;
     const requestVersion = ++workspaceRequest.current;
+    const isCurrent = () => requestVersion === workspaceRequest.current;
     workspaceSelection.current = { organizationId: orgId, lineId: selectedLineId };
-    const [lineResponse, deviceResponse] = await Promise.all([
-      api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`),
-      api<{ items: DeviceRecord[] }>("/v1/devices"),
-    ]);
-    if (requestVersion !== workspaceRequest.current) return;
+    // Devices only matter for voice: they are applied when they arrive and never delay the inbox.
+    // The outcome is captured so a failure is reported at the end, never as an unhandled rejection.
+    const devicesOutcome = api<{ items: DeviceRecord[] }>("/v1/devices")
+      .then(({ items }) => { if (isCurrent()) setDevices(items); return null; }, (error: unknown) => error);
+    const lineResponse = await api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`);
+    if (!isCurrent()) return;
     setLines(lineResponse.items);
-    setDevices(deviceResponse.items);
     const assignment = lineResponse.items.find((item) => item.lines?.id === preferredLineId) ?? lineResponse.items.find((item) => item.lines);
     const line = assignment?.lines;
     // Selecting the line returned by this load must not start the same load again.
     workspaceSelection.current = { organizationId: orgId, lineId: line?.id ?? "" };
     setSelectedLineId(line?.id ?? "");
     if (line) {
-      const [callResponse, conversationResponse] = await Promise.all([
-        assignment?.can_voice ? api<{ items: CallRecord[]; nextCursor: string | null }>(`/v1/lines/${line.id}/calls?limit=50`) : Promise.resolve({ items: [], nextCursor: null }),
-        assignment?.can_sms ? api<{ items: Conversation[]; nextCursor: string | null }>(`/v1/lines/${line.id}/conversations?limit=50`) : Promise.resolve({ items: [], nextCursor: null }),
-      ]);
-      if (requestVersion !== workspaceRequest.current) return;
       const preserveHistory = historyScope.current === line.id;
-      setCalls((current) => preserveHistory && assignment?.can_voice ? [...new Map([...current, ...callResponse.items].map((item) => [item.id, item])).values()] : callResponse.items);
-      setConversations((current) => preserveHistory && assignment?.can_sms ? [...new Map([...current, ...conversationResponse.items].map((item) => [item.id, item])).values()] : conversationResponse.items);
-      if (!preserveHistory || !historyExpanded.current) setHistoryCursors({ calls: callResponse.nextCursor, conversations: conversationResponse.nextCursor });
-      historyScope.current = line.id;
-    } else {
+      const updateCursors = (cursors: Partial<typeof historyCursors>) => {
+        if (!preserveHistory || !historyExpanded.current) setHistoryCursors((current) => ({ ...current, ...cursors }));
+      };
+      const emptyPage = { items: [], nextCursor: null };
+      // Conversations and calls are shown as each one arrives; neither waits for the other.
+      await Promise.all([
+        (assignment?.can_sms ? api<{ items: Conversation[]; nextCursor: string | null }>(`/v1/lines/${line.id}/conversations?limit=50`) : Promise.resolve(emptyPage)).then((page) => {
+          if (!isCurrent()) return;
+          setConversations((current) => preserveHistory && assignment?.can_sms ? mergeById(current, page.items) : page.items);
+          updateCursors({ conversations: page.nextCursor });
+          historyScope.current = line.id;
+        }),
+        (assignment?.can_voice ? api<{ items: CallRecord[]; nextCursor: string | null }>(`/v1/lines/${line.id}/calls?limit=50`) : Promise.resolve(emptyPage)).then((page) => {
+          if (!isCurrent()) return;
+          setCalls((current) => preserveHistory && assignment?.can_voice ? mergeById(current, page.items) : page.items);
+          updateCursors({ calls: page.nextCursor });
+          historyScope.current = line.id;
+        }),
+      ]);
+    } else if (isCurrent()) {
       setCalls([]);
       setConversations([]);
       setSelectedConversationId("");
@@ -509,6 +537,8 @@ export default function App() {
       setHistoryCursors({ calls: null, conversations: null });
       historyScope.current = "";
     }
+    const devicesError = await devicesOutcome;
+    if (devicesError) throw devicesError;
   }
 
   async function restorePendingSmsAttempt(isCurrent: () => boolean = () => true, prefetched?: PendingSms[]): Promise<void> {
@@ -540,6 +570,29 @@ export default function App() {
     }
   }
 
+  // Shows the last known inbox of this user, once per sign-in, before anything is fetched. It only
+  // fills empty state and never starts a request itself: the normal load below replaces it.
+  // Returns the organization and line that inbox belonged to.
+  function hydrateFromSnapshot(): { organizationId: string; lineId: string } {
+    const userId = session?.user.id ?? "";
+    if (userId && hydratedUser.current !== userId) {
+      hydratedUser.current = userId;
+      rememberedSelection.current = { organizationId: "", lineId: "" };
+      const snapshot = workspaceSelection.current.organizationId ? null : loadWorkspaceSnapshot<Organization, LineAssignment>(userId);
+      if (snapshot) {
+        rememberedSelection.current = { organizationId: snapshot.organizationId, lineId: snapshot.lineId };
+        workspaceSelection.current = { organizationId: snapshot.organizationId, lineId: snapshot.lineId };
+        setOrganizations(snapshot.organizations);
+        setSelectedOrg(snapshot.organizationId);
+        setLines(snapshot.lines);
+        setSelectedLineId(snapshot.lineId);
+        setConversations(snapshot.conversations);
+        setCalls(snapshot.calls);
+      }
+    }
+    return rememberedSelection.current;
+  }
+
   useEffect(() => {
     if (!authToken) {
       setWorkspaceState("ready");
@@ -562,6 +615,9 @@ export default function App() {
     let disposed = false;
     setWorkspaceState("loading");
     setSmsRecoveryState("checking");
+    // Nothing selected yet: a first load (or its repeat under StrictMode) that may resume the remembered inbox.
+    const firstLoad = !selectedOrg;
+    const remembered = hydrateFromSnapshot();
     const pendingRequest = api<{ items: PendingSms[] }>("/v1/messages/pending")
       .then(result => ({ ...result, ok: true as const }), error => ({ items: [] as PendingSms[], ok: false as const, error }));
     void Promise.all([api<{ items: Organization[] }>("/v1/organizations"), api<ServiceStatus>("/v1/services"), pendingRequest])
@@ -569,13 +625,16 @@ export default function App() {
         if (disposed) return;
         setOrganizations(items);
         setServices(status);
-        const next = selectedOrg && items.some((item) => item.organization_id === selectedOrg)
-          ? selectedOrg
+        const preferredOrg = selectedOrg || remembered.organizationId;
+        const next = preferredOrg && items.some((item) => item.organization_id === preferredOrg)
+          ? preferredOrg
           : items[0]?.organization_id ?? "";
         if (pending.items.length) await restorePendingSmsAttempt(() => !disposed, pending.items);
         else {
           setSelectedOrg(next);
-          if (next) await refreshWorkspace(next);
+          // Nothing uncertain to recover: conversations are usable while the history finishes loading.
+          if (pending.ok) setSmsRecoveryState("ready");
+          if (next) await refreshWorkspace(next, firstLoad && next === remembered.organizationId ? remembered.lineId : undefined);
         }
         if (!pending.ok) throw pending.error;
         if (!disposed) {
@@ -605,6 +664,21 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrg, selectedLineId]);
 
+  // Remember the inbox once it is fully loaded; forget it when the user has no line left.
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId || workspaceState !== "ready" || !selectedOrg) return;
+    if (!activeLine) { if (lines.every((item) => !item.lines)) clearWorkspaceSnapshot(userId); return; }
+    const timer = window.setTimeout(() => {
+      const snapshot = createSnapshot({ userId, organizationId: selectedOrg, lineId: activeLine.id, organizations, lines, conversations, calls });
+      const signature = snapshotSignature(snapshot);
+      if (signature === lastSnapshot.current) return;
+      lastSnapshot.current = signature;
+      saveWorkspaceSnapshot(snapshot);
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [session?.user.id, workspaceState, selectedOrg, activeLine?.id, organizations, lines, conversations, calls]);
+
   useEffect(() => {
     if (!messageDestination || selectedConversationId) return;
     const conversation = conversations.find((item) => item.lineId === activeLine?.id && phoneKey(item.remoteNumber) === phoneKey(messageDestination));
@@ -613,6 +687,7 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedConversationId || !authToken) {
+      loadedConversationId.current = "";
       setConversationMessages([]);
       setMessagesCursor(null);
       setMessagesState("ready");
@@ -620,28 +695,50 @@ export default function App() {
     }
     if (activeTab !== "conversations") return;
     let disposed = false;
-    setConversationMessages([]);
-    setMessagesCursor(null);
-    setMessagesState("loading");
-    void api<{ items: MessageRecord[]; nextCursor: string | null }>(`/v1/conversations/${selectedConversationId}/messages?limit=50`)
+    const conversationId = selectedConversationId;
+    // A thread opened before shows its messages at once while the fresh ones load.
+    const cached = threadCache.current.get(conversationId);
+    loadedConversationId.current = cached ? conversationId : "";
+    setConversationMessages(cached?.messages ?? []);
+    setMessagesCursor(cached?.cursor ?? null);
+    setMessagesState(cached ? "ready" : "loading");
+    void api<{ items: MessageRecord[]; nextCursor: string | null }>(`/v1/conversations/${conversationId}/messages?limit=50`)
       .then(async ({ items, nextCursor }) => {
         if (disposed) return;
-        setConversationMessages(items);
-        setMessagesCursor(nextCursor);
+        // Older pages already loaded stay visible and fresh records win on overlap.
+        setConversationMessages((current) => mergeById(current, items));
+        setMessagesCursor(cached ? cached.cursor : nextCursor);
         setMessagesState("ready");
+        loadedConversationId.current = conversationId;
         if (document.visibilityState === "visible") {
           try {
-            await api(`/v1/conversations/${selectedConversationId}/read`, {
+            await api(`/v1/conversations/${conversationId}/read`, {
               method: "PUT", body: JSON.stringify({ lastReadMessageId: items.at(-1)?.id ?? null }),
             });
-            if (!disposed) setConversations((current) => current.map((conversation) => conversation.id === selectedConversationId ? { ...conversation, unread: false } : conversation));
+            if (!disposed) setConversations((current) => current.map((conversation) => conversation.id === conversationId ? { ...conversation, unread: false } : conversation));
           } catch { if (!disposed) setNotice("Les messages sont chargés, mais leur état de lecture n’a pas pu être enregistré."); }
         }
       })
-      .catch((error: Error) => { if (!disposed) { setMessagesState("error"); setNotice(error.message); } });
+      .catch((error: Error) => {
+        if (disposed) return;
+        // Access removed: never keep showing what was cached for this thread.
+        if (error instanceof ApiClientError && (error.status === 403 || error.status === 404)) {
+          threadCache.current.delete(conversationId);
+          loadedConversationId.current = "";
+          setConversationMessages([]);
+          setMessagesCursor(null);
+        }
+        setMessagesState("error"); setNotice(error.message);
+      });
     return () => { disposed = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken, selectedConversationId, activeTab, messageReload]);
+
+  // Remember the pages of the open thread; only once they are known to belong to it.
+  useEffect(() => {
+    if (!selectedConversationId || messagesState !== "ready" || loadedConversationId.current !== selectedConversationId || !conversationMessages.length) return;
+    threadCache.current.set(selectedConversationId, { messages: conversationMessages, cursor: messagesCursor });
+  }, [selectedConversationId, conversationMessages, messagesCursor, messagesState]);
 
   useEffect(() => {
     const realtimeClient = supabase;
