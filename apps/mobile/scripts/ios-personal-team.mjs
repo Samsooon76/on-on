@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 
 const mobileDirectory = fileURLToPath(new URL("../", import.meta.url));
 const entitlementsPath = fileURLToPath(new URL("../ios/Onoff/Onoff.entitlements", import.meta.url));
-const pushEntitlement = /^[ \t]*<key>aps-environment<\/key>\r?\n[ \t]*<string>(development|production)<\/string>\r?\n/m;
+const pushEntitlement = /[ \t]*<key>\s*aps-environment\s*<\/key>\s*<string>\s*(development|production)\s*<\/string>[ \t]*(?:\r?\n)?/m;
 const env = { ...process.env, EXPO_PUBLIC_IOS_LOCAL_NO_PUSH: "1" };
 const { values, positionals } = parseArgs({
   options: { dev: { type: "boolean", default: false } },
@@ -39,14 +39,17 @@ function run(command, args) {
 
 const original = await readFile(entitlementsPath, "utf8");
 const withoutPush = original.replace(pushEntitlement, "");
-if (withoutPush === original) {
-  throw new Error(`Autorisation APNs introuvable dans ${entitlementsPath}. Vérifiez le projet iOS avant de lancer l'aperçu.`);
+const removedPush = withoutPush !== original;
+if (/<key>\s*aps-environment\s*<\/key>/.test(withoutPush)) {
+  throw new Error(`Format de l'autorisation APNs non reconnu dans ${entitlementsPath}. Vérifiez le projet iOS avant de lancer l'aperçu.`);
 }
 
 let status;
 try {
-  await writeFile(entitlementsPath, withoutPush);
-  console.log("Compilation iOS avec APNs désactivé temporairement pour l'équipe Apple personnelle.");
+  if (removedPush) await writeFile(entitlementsPath, withoutPush);
+  console.log(removedPush
+    ? "Compilation iOS avec APNs désactivé temporairement pour l'équipe Apple personnelle."
+    : "APNs déjà désactivé : compilation iOS pour l'équipe Apple personnelle.");
   console.log(values.dev
     ? "Mode développement : Metro reste ouvert pendant l'essai ; Ctrl-C rétablit l'autorisation APNs d'origine."
     : "Version autonome : le code est inclus dans l'app, qui démarre sans URL ni serveur Metro.");
@@ -56,8 +59,10 @@ try {
     ...(!values.dev ? ["--no-bundler"] : []),
   ]);
 } finally {
-  await writeFile(entitlementsPath, original);
-  console.log("Autorisation APNs d'origine rétablie dans le projet.");
+  if (removedPush) {
+    await writeFile(entitlementsPath, original);
+    console.log("Autorisation APNs d'origine rétablie dans le projet.");
+  }
 }
 
 process.exitCode = status;

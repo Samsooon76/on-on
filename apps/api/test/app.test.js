@@ -73,6 +73,20 @@ test("user routes reject requests without a bearer token", async (t) => {
   assert.equal(response.json().code, "unauthorized");
 });
 
+test("allowed origins can cache preflights without bypassing authentication", async (t) => {
+  const app = createApp(config);
+  t.after(() => app.close());
+  const headers = { origin: "http://localhost:5173", "access-control-request-method": "GET", "access-control-request-headers": "authorization, x-request-id" };
+  const preflight = await app.inject({ method: "OPTIONS", url: "/v1/organizations", headers });
+  assert.equal(preflight.statusCode, 204);
+  assert.equal(preflight.headers["access-control-max-age"], "600");
+  assert.equal(preflight.headers["access-control-allow-origin"], headers.origin);
+  const denied = await app.inject({ method: "OPTIONS", url: "/v1/organizations", headers: { ...headers, origin: "https://untrusted.example" } });
+  assert.equal(denied.headers["access-control-max-age"], undefined);
+  assert.equal(denied.headers["access-control-allow-origin"], undefined);
+  assert.equal((await app.inject({ method: "GET", url: "/v1/organizations", headers })).statusCode, 401);
+});
+
 test("device voice-state changes reject requests without a bearer token", async (t) => {
   const app = createApp(config);
   t.after(() => app.close());

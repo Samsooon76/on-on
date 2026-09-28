@@ -5,7 +5,8 @@ export default defineConfig({
   manifestVersion: 3,
   manifest: {
     name: "Onoff click-to-call",
-    description: "Ouvre le composeur Onoff avec le numéro choisi.",
+    description: "Détecte les numéros de la page et lance les appels dans Onoff.",
+    optional_host_permissions: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
     permissions: ["activeTab", "scripting", "storage"],
   },
 });

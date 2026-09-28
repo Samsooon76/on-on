@@ -196,6 +196,7 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       reply.header("access-control-allow-headers", "authorization, content-type, idempotency-key, x-request-id, mcp-protocol-version, mcp-method, mcp-name");
       reply.header("access-control-expose-headers", "www-authenticate, mcp-protocol-version, retry-after");
       reply.header("access-control-allow-methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+      reply.header("access-control-max-age", "600");
       reply.header("vary", "Origin");
     }
     if (request.method === "OPTIONS") return reply.code(204).send();
@@ -287,8 +288,8 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
   registerCallFollowups(app, serviceSupabase);
   registerTags(app, config, serviceSupabase, dependencies.tagClassifier);
   registerMcp(app, config, serviceSupabase, makeSupabaseClient, makeSmsProvider);
-  const callCenter = registerCallCenter(app, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), config, validateTwilioWebhook);
-  registerTranscription(app, config, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), validateTwilioWebhook, dependencies.scribeSocketFactory);
+  const startAutomaticTranscription = registerTranscription(app, config, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), validateTwilioWebhook, dependencies.scribeSocketFactory);
+  const callCenter = registerCallCenter(app, serviceSupabase, dependencies.centerProvider ?? createCenterProvider(config), config, validateTwilioWebhook, startAutomaticTranscription);
 
   routes.post("/v1/diagnostics/voice", async (request, reply) => {
     const context = request.context;
@@ -734,6 +735,10 @@ export function createApp(config: AppConfig, dependencies: ApiDependencies = {})
       : {};
     const providerEventLagMs = statusArgs.p_provider_event_at ? Math.max(0, Date.now() - Date.parse(statusArgs.p_provider_event_at)) : undefined;
     request.log.info({ requestId: request.id, callId: callOutcome.callId, callSid, parentCallSid: statusArgs.p_parent_call_sid, providerStatus: statusArgs.p_call_status, providerEventAt: statusArgs.p_provider_event_at, providerEventLagMs, duplicate: callOutcome.duplicate === true, ignored: callOutcome.ignored === true }, "voice status event processed");
+    if (body.CallStatus === "in-progress" && callOutcome.callId && !callOutcome.ignored && body.ParentCallSid) {
+      const { data: call } = await serviceSupabase.from("calls").select("direction").eq("id", callOutcome.callId).maybeSingle();
+      if (call) await startAutomaticTranscription(callOutcome.callId, call.direction === "outbound" ? body.ParentCallSid : callSid, request);
+    }
     const clientTarget = body.To?.startsWith("client:") ? body.To.slice("client:".length) : "";
     if ((body.CallStatus === "in-progress" || body.CallStatus === "completed")
         && clientTarget.length > 0 && clientTarget.length <= 121) {

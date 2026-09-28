@@ -5,6 +5,7 @@ import { defaultIvrConfig, ivrConfigSchema, type AdminMember, type AdminLine, ty
 import { Avatar, EmptyState, Modal } from "./ui";
 import { formatPhone } from "./conversation-model";
 import "./admin.css";
+import { AutoTranscriptionSettings } from "./AutoTranscriptionSettings";
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Props = { organizationId: string; userId: string; api: Api; onPurchase(): void; onChanged(): Promise<void>; refreshKey: number; purchaseEnabled: boolean };
@@ -55,6 +56,7 @@ export function Admin({ organizationId, userId, api, onPurchase, onChanged, refr
     <nav className="section-tabs" aria-label="Rubriques d’administration">{([
       ["members", "Utilisateurs", Users], ["lines", "Numéros & IVR", Phone], ["roles", "Rôles & permissions", ShieldCheck], ["audit", "Historique", ArrowClockwise],
     ] as const).map(([key, label, Icon]) => <button key={key} aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={17} />{label}{key === "members" && data && <span>{data.members.length}</span>}</button>)}</nav>
+    <AutoTranscriptionSettings key={organizationId} api={api} base={base} refreshKey={refreshKey} />
     {notice && <p className="admin-notice" role="status"><CheckCircle size={17} />{notice}</p>}
     {error && <div className="admin-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void reload()}>Réessayer</button></div>}
     {loading && !data && <p className="admin-loading" role="status">Chargement de l’administration…</p>}

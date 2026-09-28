@@ -16,7 +16,7 @@ export function isOpen(schedule: VoiceFlow["schedule"], now = new Date()): boole
   if (schedule.opensAt < schedule.closesAt) return schedule.days.includes(day) && time >= schedule.opensAt && time < schedule.closesAt;
   return (schedule.days.includes(day) && time >= schedule.opensAt) || (schedule.days.includes(day === 1 ? 7 : day - 1) && time < schedule.closesAt);
 }
-export function voiceCenterRuntime(db: CenterStore, provider: CenterProvider | null, config: AppConfig) {
+export function voiceCenterRuntime(db: CenterStore, provider: CenterProvider | null, config: AppConfig, startAutomaticTranscription?: (callId: string, providerSid: string, request: FastifyRequest) => Promise<void>) {
   const base = config.API_PUBLIC_URL.replace(/\/$/, "");
   function url(path: string, session: VoiceSession, params: Record<string, string | number> = {}) {
     return `${base}/webhooks/twilio/center/${path}?${new URLSearchParams(Object.entries({ epoch: session.epoch, ...params }).map(([k,v]) => [k,String(v)]))}`;
@@ -114,6 +114,7 @@ export function voiceCenterRuntime(db: CenterStore, provider: CenterProvider | n
         if (action === "recorded") { await finish(session,"completed","voicemail"); return reply.send(hangup()); }
         if (action === "leg") {
           if (body.CallStatus === "in-progress") checked(await db.from("calls").update({ status:"answered",answered_at:new Date().toISOString() }).eq("id",session.callId).is("ended_at",null));
+          if (body.CallStatus === "in-progress" && body.CallSid) await startAutomaticTranscription?.(session.callId, body.CallSid, request);
           return reply.send(empty());
         }
         const call = checked(await db.from("calls").select("ivr_state").eq("id",session.callId).eq("organization_id",session.orgId).single());

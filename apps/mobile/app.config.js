@@ -12,6 +12,7 @@ export default {
     userInterfaceStyle: "light",
     primaryColor: "#242424",
     plugins: [
+      "./plugins/with-call-sounds.cjs",
       ["expo-build-properties", { ios: { enableSceneSupport: true } }],
       ["@twilio/voice-react-native-sdk", {
         apsEnvironment: variant === "demo" ? "production" : "development",

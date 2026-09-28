@@ -3,7 +3,7 @@ import { buildTimeline, callLabel, formatDuration, initials, isMissedCall, type 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from "react-native";
 import { conversationDay, filterInbox, type InboxFilter } from "./conversation-model";
-import { callStatusLabel, isDialableNumber, messageStatusLabel, relativeCallDate } from "./phone";
+import { callStatusLabel, isDialableNumber, messageStatusLabel, phoneCountries, relativeCallDate, type PhoneCountry } from "./phone";
 import { ActionButton, Empty, Icon, IconButton, SearchField, Touch, feedback, palette, styles } from "./ui";
 
 export function ConversationInbox(props: {
@@ -43,11 +43,12 @@ export function ConversationThread(props: {
   number: string; name: string | null; lineNumber: string; calls: CallRecord[]; messages: MessageRecord[];
   state: "loading" | "ready" | "error"; hasOlder: boolean; loadingOlder: boolean; hasMoreCalls: boolean; loadingMore: boolean;
   refreshing: boolean; body: string; recipientEditable: boolean; locked: boolean; pending: boolean; recoveryReady: boolean;
-  busy: boolean; canSms: boolean; canCall: boolean; segments: number; bottomInset: number;
+  busy: boolean; canSms: boolean; canCall: boolean; segments: number; bottomInset: number; defaultPhoneCountry: PhoneCountry;
   onOlder(): void; onMoreCalls(): void; onRetry(): void; onRefresh(): void; onBody(body: string): void;
   onDestination(number: string): void; onSend(): void; onCall(): void; onTranscript(callId: string): void;
 }) {
   const [filter, setFilter] = useState<"all" | "message" | "call">("all");
+  const callingCode = phoneCountries.find((country) => country.code === props.defaultPhoneCountry)?.callingCode ?? "+32";
   const timeline = useMemo(() => buildTimeline(props.messages, props.calls).filter((event) => filter === "all" || event.kind === filter).reverse(), [props.messages, props.calls, filter]);
   const list = useRef<FlatList>(null);
   const nearLatest = useRef(true);
@@ -62,7 +63,10 @@ export function ConversationThread(props: {
   </View>;
   return <View style={styles.flex}>
     <View style={s.threadTop}>
-      {props.recipientEditable && <TextInput accessibilityLabel="Numéro du destinataire" style={[styles.input, s.recipient]} editable={!props.locked && !props.busy} placeholder="À : numéro international" placeholderTextColor={palette.muted} keyboardType="phone-pad" value={props.number} onChangeText={props.onDestination} />}
+      {props.recipientEditable && <>
+        <TextInput accessibilityLabel="Numéro du destinataire" style={[styles.input, s.recipient]} editable={!props.locked && !props.busy} placeholder="À : numéro local ou international" placeholderTextColor={palette.muted} keyboardType="phone-pad" value={props.number} onChangeText={props.onDestination} />
+        <Text style={s.recipientHint}>Numéro local : indicatif {callingCode} ajouté automatiquement.</Text>
+      </>}
       {props.name && <Text style={s.threadNumber}>{props.number}</Text>}
       <View style={styles.segmentBar}>{([['all', 'Tout'], ['message', 'SMS'], ['call', 'Appels']] as const).map(([value, label]) => <Touch key={value} accessibilityRole="tab" accessibilityState={{ selected: filter === value }} style={[styles.segment, filter === value && styles.segmentActive]} onPress={() => { feedback(); nearLatest.current = true; setFilter(value); }}><Text style={[styles.segmentText, filter === value && styles.segmentTextActive]}>{label}</Text></Touch>)}</View>
       <Text style={s.lineLabel}>{props.lineNumber ? `Via votre ligne ${props.lineNumber}` : "Aucune ligne attribuée"}</Text>
@@ -87,7 +91,7 @@ export function ConversationThread(props: {
             <View style={[s.callIcon, isMissedCall(event.call) && styles.missedIcon]}><Icon name={isMissedCall(event.call) ? "call-outline" : event.call.direction === "inbound" ? "arrow-down-outline" : "arrow-up-outline"} size={18} color={isMissedCall(event.call) ? palette.red : palette.accent} /></View>
             <View style={styles.rowCopy}><Text style={[s.callTitle, isMissedCall(event.call) && styles.missedText]}>{callLabel(event.call)}</Text><Text style={styles.rowMeta}>{event.call.duration_seconds ? formatDuration(event.call.duration_seconds) : callStatusLabel(event.call.status)} · {time(event.createdAt)}</Text></View>
             <IconButton icon="document-text-outline" label="Tags et transcription de cet appel" onPress={() => props.onTranscript(event.call.id)} />
-            <IconButton icon="call-outline" label={`Rappeler ${props.name ?? props.number}`} disabled={!props.canCall || props.busy || !isDialableNumber(props.number)} onPress={props.onCall} />
+            <IconButton icon="call-outline" label={`Rappeler ${props.name ?? props.number}`} disabled={!props.canCall || props.busy || !isDialableNumber(props.number, props.defaultPhoneCountry)} onPress={props.onCall} />
           </View>}
         </View>;
       }}
@@ -95,7 +99,7 @@ export function ConversationThread(props: {
     <View style={[s.composer, { paddingBottom: Math.max(props.bottomInset, 12) }]}>
       {props.pending && <Text style={s.pending}>Cet envoi attend une confirmation. Votre message est conservé.</Text>}
       {!props.canSms && <Text style={styles.hint}>Les SMS ne sont pas activés sur cette ligne.</Text>}
-      <View style={s.composeRow}><TextInput accessibilityLabel="Votre message" style={s.messageInput} editable={!props.locked && props.canSms && !props.busy} placeholder="Écrire un SMS…" placeholderTextColor={palette.muted} value={props.body} onChangeText={props.onBody} multiline maxLength={1600} /><Touch accessibilityLabel={props.pending ? "Vérifier l’envoi" : "Envoyer le message"} style={s.send} disabled={props.busy || !props.recoveryReady || !props.canSms || !props.body.trim() || !isDialableNumber(props.number)} onPress={props.onSend}>{props.busy ? <ActivityIndicator color={palette.white} /> : <Icon name={props.pending ? "refresh" : "arrow-up"} color={palette.white} />}</Touch></View>
+      <View style={s.composeRow}><TextInput accessibilityLabel="Votre message" style={s.messageInput} editable={!props.locked && props.canSms && !props.busy} placeholder="Écrire un SMS…" placeholderTextColor={palette.muted} value={props.body} onChangeText={props.onBody} multiline maxLength={1600} /><Touch accessibilityLabel={props.pending ? "Vérifier l’envoi" : "Envoyer le message"} style={s.send} disabled={props.busy || !props.recoveryReady || !props.canSms || !props.body.trim() || !isDialableNumber(props.number, props.defaultPhoneCountry)} onPress={props.onSend}>{props.busy ? <ActivityIndicator color={palette.white} /> : <Icon name={props.pending ? "refresh" : "arrow-up"} color={palette.white} />}</Touch></View>
       <Text style={s.composerNote}>{props.pending ? "Vérifier l’envoi avec ↻" : props.body.length ? `${props.body.length}/1600 · ${props.segments} SMS estimé${props.segments > 1 ? "s" : ""}` : "SMS"}</Text>
     </View>
   </View>;
@@ -110,6 +114,7 @@ const s = themedStyles({
   previewText: { flex: 1, color: palette.muted, fontSize: 13, lineHeight: 19 },
   threadTop: { paddingHorizontal: 22, gap: 8, paddingBottom: 10 },
   recipient: { marginBottom: 0 },
+  recipientHint: { color: palette.muted, fontSize: 11, paddingHorizontal: 3, marginBottom: 2 },
   threadNumber: { color: palette.muted, fontSize: 12 },
   lineLabel: { color: palette.muted, fontSize: 11, textAlign: "center", paddingVertical: 3 },
   status: { padding: 12, flexDirection: "row", gap: 8, justifyContent: "center" },

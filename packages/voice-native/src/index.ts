@@ -17,12 +17,24 @@ export interface NativeVoiceClient extends VoiceClient {
 export class TwilioNativeVoiceClient implements NativeVoiceClient {
   private readonly voice = new Voice();
   private readonly listeners = new Set<(event: VoiceEvent) => void>();
+  private readonly audioReady: Promise<void>;
   private accessToken = "";
   private activeCall: Call | null = null;
   private pendingInvite: CallInvite | null = null;
   private audioRouteListener: ((snapshot: NativeAudioRouteSnapshot) => void) | null = null;
 
   constructor(private readonly platform: "ios" | "android", enablePushRegistry = true) {
+    this.audioReady = platform === "ios"
+      ? this.voice.setCallKitConfiguration({
+          callKitRingtoneSound: "incoming.wav",
+          callKitIconTemplateImageData: "",
+          callKitIncludesCallsInRecents: true,
+          callKitMaximumCallGroups: 1,
+          callKitMaximumCallsPerCallGroup: 1,
+          callKitSupportedHandleTypes: [0, 1],
+        })
+      : Promise.resolve();
+    void this.audioReady.catch((error: unknown) => this.emit({ type: "unavailable", message: getMessage(error) }));
     if (platform === "ios" && enablePushRegistry) {
       void this.voice.initializePushRegistry().catch((error: unknown) => {
         this.emit({ type: "unavailable", message: getMessage(error) });
@@ -39,6 +51,7 @@ export class TwilioNativeVoiceClient implements NativeVoiceClient {
   }
 
   async register(token: string, _refreshToken: () => Promise<string>): Promise<void> {
+    await this.audioReady;
     this.accessToken = token;
     await this.voice.register(token);
   }

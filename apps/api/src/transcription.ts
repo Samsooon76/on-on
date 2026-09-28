@@ -25,7 +25,7 @@ function publicTranscript(row: TranscriptRow | null): CallTranscript | null {
 }
 
 export function registerTranscription(app: FastifyInstance, config: AppConfig, service: SupabaseClient<Database> | null, provider: CenterProvider | null,
-  validateWebhook: (request: FastifyRequest, transport?: "http" | "websocket") => boolean, openSocket?: ScribeSocketFactory): void {
+  validateWebhook: (request: FastifyRequest, transport?: "http" | "websocket") => boolean, openSocket?: ScribeSocketFactory) {
   // Isolate the new schema until generated database types are refreshed on deployment.
   const db = service as SupabaseClient | null;
   const available = Boolean(config.TRANSCRIPTION_ENABLED && config.ELEVENLABS_API_KEY && db && provider);
@@ -79,8 +79,11 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
     if (config.OPERATIONS_PAUSED) problem(config.OPERATIONS_PAUSE_MESSAGE);
     if (call.ended_at || !["in-progress", "answered"].includes(call.status)) problem("La transcription démarre pendant un appel connecté.", 409);
     const providerSid = (request.params as { id: string }).id;
+    return start(call, providerSid, request.context!.userId);
+  });
+  async function start(call: { id: string; status: string; ended_at: string | null }, providerSid: string, startedBy: string | null) {
     // Unique call_id is the distributed start lock, including retries after a lost HTTP response.
-    const inserted = await db!.from("call_transcriptions").insert({ call_id: call.id, provider_call_sid: providerSid, started_by: request.context!.userId,
+    const inserted = await db!.from("call_transcriptions").insert({ call_id: call.id, provider_call_sid: providerSid, started_by: startedBy,
       ...(recordingEnabled ? { recording_status: "starting", recording_started_at: new Date().toISOString(), recording_updated_at: new Date().toISOString() } : {}),
     }).select("*").single();
     if (inserted.error && inserted.error.code !== "23505") problem("Impossible de préparer la transcription.");
@@ -105,7 +108,7 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
     }
     row = await readRow(call.id);
     return transcriptionResponseSchema.parse({ available, recordingEnabled, callId: call.id, callActive: running(call), transcript: publicTranscript(row) });
-  });
+  }
   app.post("/v1/calls/:id/transcription/stop", async (request, reply) => {
     reply.header("cache-control", "no-store");
     const call = await authorizedCall(request, false);
@@ -238,4 +241,16 @@ export function registerTranscription(app: FastifyInstance, config: AppConfig, s
     });
   });
   app.addHook("preClose", async () => { await Promise.allSettled([...liveSessions.values()].map((close) => close())); });
+  return async function startAutomatic(callId: string, providerSid: string, request: FastifyRequest) {
+    if (!available || !db || config.OPERATIONS_PAUSED || !sidSchema.safeParse(providerSid).success) return;
+    try {
+      const call = checked(await db.from("calls").select("id,organization_id,status,ended_at").eq("id", callId).maybeSingle());
+      if (!call || call.ended_at || !["answered", "in-progress"].includes(call.status)) return;
+      const setting = checked(await db.from("transcription_settings").select("auto_start").eq("organization_id", call.organization_id).maybeSingle());
+      if (setting?.auto_start) await start(call, providerSid, null);
+    } catch {
+      request.log.warn({ callId }, "Automatic transcription could not start");
+    }
+  };
+
 }

@@ -18,11 +18,11 @@ class ScribeSocket extends EventEmitter {
   receive(event) { this.emit('message', Buffer.from(JSON.stringify(event))); }
 }
 function setup(t, recordingEnabled = false) {
-  const state = { allowed: true, starts: [], stops: [], rows: [], sockets: [], recordingStarts: [], recordingStops: [], recordingStatus: 'in-progress', recordingFails: false, call: { id: callId, status: 'answered', ended_at: null, started_at: new Date().toISOString(), created_at: new Date().toISOString() } };
-  function client(user = false) { return { auth: { getUser: async () => ({ data: { user: { id: userId, is_anonymous: false } }, error: null }) }, from(table) {
+  const state = { allowed: true, starts: [], stops: [], rows: [], sockets: [], recordingStarts: [], recordingStops: [], recordingStatus: 'in-progress', recordingFails: false, autoStart: false, call: { organization_id: userId, direction: 'outbound', id: callId, status: 'answered', ended_at: null, started_at: new Date().toISOString(), created_at: new Date().toISOString() } };
+  function client(user = false) { return { rpc: async () => ({ data: { callId }, error: null }), auth: { getUser: async () => ({ data: { user: { id: userId, is_anonymous: false } }, error: null }) }, from(table) {
     const filters = []; let one = false, mutation, values;
     const q = { select() { return q; }, eq(k, v) { filters.push(row => row[k] === v); return q; }, is(k, v) { return q.eq(k, v); }, in(k, values) { filters.push(row => values.includes(row[k])); return q; }, maybeSingle() { one = true; return q; }, single() { one = true; return q; }, insert(v) { mutation = 'insert'; values = v; return q; }, update(v) { mutation = 'update'; values = v; return q; }, then(resolve, reject) {
-      let rows = table === 'calls' ? user && !state.allowed ? [] : [state.call] : table === 'call_legs' ? user ? [] : [{ provider_call_sid: sid('CA'), call_id: callId }] : state.rows;
+      let rows = table === 'transcription_settings' ? [{ organization_id: userId, auto_start: state.autoStart }] : table === 'calls' ? user && !state.allowed ? [] : [state.call] : table === 'call_legs' ? user ? [] : [{ provider_call_sid: sid('CA'), call_id: callId }] : state.rows;
       if (mutation === 'insert') {
         if (rows.some(row => row.call_id === values.call_id)) return Promise.resolve({ data: null, error: { code: '23505' } }).then(resolve, reject);
         const row = { id: randomUUID(), recording_sid: null, recording_status: null, recording_stop_requested: false, ...values, stream_sid: null, stream_connected: false, status: 'starting', started_at: new Date().toISOString(), updated_at: new Date().toISOString(), snapshot: { segments: [], partials: { local: null, remote: null } }, error: null };
@@ -256,4 +256,42 @@ test('a late callback after an uncertain recording start honors an earlier stop'
   assert.equal((await recordingCallback(app, state, { RecordingStatus: 'in-progress' })).statusCode, 204);
   assert.equal(state.rows[0].recording_status, 'ready');
   assert.equal(state.recordingStops.length, 1);
+});
+
+async function connectedWebhook(app, status = 'in-progress', valid = true) {
+  const url = '/webhooks/twilio/voice/status';
+  const body = { AccountSid: sid('AC'), CallSid: 'CA' + '2'.repeat(32), ParentCallSid: sid('CA'), CallStatus: status };
+  return app.inject({ method: 'POST', url, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-twilio-signature': valid ? twilio.getExpectedTwilioSignature(config.TWILIO_AUTH_TOKEN, config.API_PUBLIC_URL + url, body) : 'invalid' }, payload: new URLSearchParams(body).toString() });
+}
+test('automatic transcription defaults off and starts once on a connected outbound call', async t => {
+  const { app, state, request } = setup(t);
+  assert.equal((await connectedWebhook(app)).statusCode, 204);
+  assert.equal(state.starts.length, 0);
+  state.autoStart = true;
+  assert.equal((await connectedWebhook(app, 'ringing')).statusCode, 204);
+  assert.equal(state.starts.length, 0);
+  await Promise.all([connectedWebhook(app), connectedWebhook(app)]);
+  assert.equal(state.starts.length, 1);
+  assert.equal(state.starts[0].callSid, sid('CA'));
+  assert.equal(state.rows[0].started_by, null);
+  await request('POST');
+  assert.equal(state.starts.length, 1);
+  await request('POST', `/v1/calls/${callId}/transcription/stop`);
+  await connectedWebhook(app);
+  assert.equal(state.starts.length, 1);
+});
+test('automatic inbound transcription uses the answered agent leg and records when configured', async t => {
+  const { app, state } = setup(t, true);
+  state.autoStart = true; state.call.direction = 'inbound';
+  await connectedWebhook(app);
+  assert.equal(state.starts[0].callSid, 'CA' + '2'.repeat(32));
+  assert.equal(state.recordingStarts.length, 1);
+});
+test('automatic transcription rejects forged callbacks and ended calls', async t => {
+  const { app, state } = setup(t); state.autoStart = true;
+  assert.equal((await connectedWebhook(app, 'in-progress', false)).statusCode, 403);
+  assert.equal(state.starts.length, 0);
+  state.call.ended_at = new Date().toISOString();
+  await connectedWebhook(app);
+  assert.equal(state.starts.length, 0);
 });

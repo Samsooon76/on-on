@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { adminMemberCreateSchema, adminMemberUpdateSchema, adminIvrUpdateSchema, uuidSchema, type Database } from "@onoff/contracts";
@@ -41,6 +42,21 @@ export function registerAdminRoutes(app: FastifyInstance, service: SupabaseClien
     if (error) return databaseFailure(reply, request, error.code);
     reply.header("cache-control", "no-store");
     return data;
+  });
+  app.get<{ Params: Params }>(`${base}/transcription`, async (request, reply) => {
+    const scope = await authorize(request, reply); if (!scope) return;
+    const { data, error } = await (scope.service as SupabaseClient).from("transcription_settings").select("auto_start").eq("organization_id", scope.orgId).maybeSingle();
+    if (error) return databaseFailure(reply, request, error.code);
+    reply.header("cache-control", "no-store");
+    return { autoStart: data?.auto_start ?? false };
+  });
+  app.put<{ Params: Params }>(`${base}/transcription`, async (request, reply) => {
+    const scope = await authorize(request, reply); if (!scope) return;
+    const input = z.object({ autoStart: z.boolean() }).strict().safeParse(request.body);
+    if (!input.success) return fail(reply, request, 400, "invalid_transcription_setting", "Réglage de transcription invalide.");
+    const { error } = await (scope.service as SupabaseClient).from("transcription_settings").upsert({ organization_id: scope.orgId, auto_start: input.data.autoStart });
+    if (error) return databaseFailure(reply, request, error.code);
+    return input.data;
   });
   app.post<{ Params: Params }>(`${base}/members`, async (request, reply) => {
     const scope = await authorize(request, reply); if (!scope) return;

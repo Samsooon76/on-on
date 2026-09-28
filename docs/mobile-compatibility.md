@@ -66,7 +66,7 @@ Une équipe Apple personnelle ne peut pas signer la capacité Push Notifications
 pnpm --filter @onoff/mobile ios:personal
 ```
 
-La commande retire temporairement `aps-environment`, compile en **Release** avec le code JavaScript embarqué et installe l'app, puis rétablit le fichier iOS d'origine. L'app s'ouvre directement depuis son icône, sans URL ni serveur Metro : le Mac peut être éteint, et une connexion 4G/5G ou Wi-Fi suffit pour accéder à l'API Railway configurée dans `apps/mobile/.env`. Une nouvelle installation est nécessaire pour mettre à jour le code mobile tant qu'EAS Update n'est pas configuré.
+La commande retire temporairement `aps-environment` s'il est présent, compile en **Release** avec le code JavaScript embarqué et installe l'app, puis rétablit le fichier iOS d'origine. Si APNs est déjà absent, elle lance directement la compilation sans modifier ce fichier. L'app s'ouvre directement depuis son icône, sans URL ni serveur Metro : le Mac peut être éteint, et une connexion 4G/5G ou Wi-Fi suffit pour accéder à l'API Railway configurée dans `apps/mobile/.env`. Une nouvelle installation est nécessaire pour mettre à jour le code mobile tant qu'EAS Update n'est pas configuré.
 
 Pour travailler avec le rechargement à chaud, utiliser `pnpm --filter @onoff/mobile ios:personal --dev`. Ce mode démarre Metro et requiert de garder le terminal ouvert pendant l'essai ; `Ctrl-C` rétablit le fichier iOS d'origine. Les deux modes acceptent le nom ou l'identifiant de l'iPhone en argument.
 

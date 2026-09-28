@@ -16,6 +16,14 @@ API_PUBLIC_URL=https://votre-api.example.com
 
 Les credentials Twilio/Supabase existants restent requis. La clé ElevenLabs nécessite l’accès Speech to Text et un quota disponible. Aucun secret ElevenLabs ne doit être ajouté aux variables `VITE_*` ou `EXPO_PUBLIC_*`. Le proxy doit accepter les upgrades WebSocket sur `/webhooks/twilio/transcription/:id`. Aucune capture audio supplémentaire, permission microphone ou modification des webhooks vocaux existants n’est nécessaire sur iOS.
 
+### Démarrage automatique
+
+Appliquer aussi `supabase/migrations/20260928113944_automatic_call_transcription.sql`, puis activer **Administration → Transcription automatique des appels → Activer automatiquement**. Le réglage est réservé aux administrateurs actifs et s’applique à toute leur organisation. Il est désactivé par défaut.
+
+Les callbacks Twilio signés lancent la transcription dès la connexion du correspondant, pour les appels entrants, sortants, les files et les renvois du centre d’appels. Cela fonctionne sans ouvrir le panneau de transcription, sur web comme sur mobile. Les sonneries et l’attente dans l’IVR ne déclenchent pas la transcription. Si l’enregistrement audio est configuré, il démarre également. Prévoir l’information des interlocuteurs avant l’échange : cette option ne diffuse pas d’annonce vocale.
+
+La désactivation concerne les prochains démarrages ; les sessions en cours restent contrôlables avec **Arrêter**. Les callbacks répétés et le bouton manuel partagent le verrou d’une session par appel. Une erreur de transcription ne doit pas interrompre l’appel. Le réglage ne remplace pas `TRANSCRIPTION_ENABLED` et les credentials serveur.
+
 Dans un appel connecté : ouvrir **Transcription** puis **Transcrire et enregistrer**. L’interface invite l’utilisateur à informer son interlocuteur de la transcription et de l’enregistrement. Ce bouton ne diffuse pas d’annonce vocale automatique. La transcription et l’enregistrement commencent à cet instant, sans récupérer rétroactivement le début de l’appel. **Arrêter** finalise le texte et l’audio sans raccrocher. Une session par appel, sans redémarrage après l’arrêt. L’historique des appels et les conversations permettent de relire le texte, le copier/télécharger sur le web, ou le partager via la feuille iOS. Si `CALL_RECORDING_ENABLED=false`, le bouton conserve son comportement de transcription seule.
 
 Le lecteur apparaît au-dessus du texte sur le web et iOS : lecture/pause, position, durée et vitesse de 1× à 2×. La lecture devient possible après la fin de l’appel et la préparation du fichier par Twilio. Elle est suspendue pendant un nouvel appel et à la fermeture du panneau. iOS utilise `expo-audio` : installer les pods et reconstruire l’application native ; un ancien development build reste utilisable mais invite à sa mise à jour pour écouter l’audio.

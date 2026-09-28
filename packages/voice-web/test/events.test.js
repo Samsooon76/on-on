@@ -116,3 +116,27 @@ test("a second incoming call cannot replace the one displayed", () => {
   assert.equal(visible.rejected, undefined);
   assert.deepEqual(events.map(event => event.type), ["incoming"]);
 });
+
+test("incoming ringtone stops for every terminal event and on answering", () => {
+  for (const event of ["accept", "reject", "cancel", "disconnect", "error"]) {
+    const call = incomingCall("call", "CA1");
+    const { client } = setup(async () => call);
+    const sounds = [];
+    client.ringtone = { play: mode => sounds.push(mode), stop: () => sounds.push("stop") };
+    client.handleIncoming(call);
+    call.emit(event);
+    assert.deepEqual(sounds, ["incoming", "stop"]);
+  }
+});
+
+test("outgoing tone yields to early media and stops on connection", async () => {
+  const call = sdkCall();
+  const { client } = setup(async () => call);
+  const sounds = [];
+  client.ringtone = { play: mode => sounds.push(mode), stop: () => sounds.push("stop") };
+  await client.startCall(target);
+  call.emit("ringing", false);
+  call.emit("ringing", true);
+  call.emit("accept");
+  assert.deepEqual(sounds, ["outgoing", "stop", "stop"]);
+});

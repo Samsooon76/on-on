@@ -33,7 +33,7 @@ export function useContacts(scope: string, query: string, load: Loader) {
 
   useEffect(() => {
     setState(scope ? "loading" : "ready"); setError(""); setLoadingMore(false);
-    const timer = setTimeout(() => void refresh(), 200);
+    const timer = setTimeout(() => void refresh(), query ? 200 : 0);
     return () => { clearTimeout(timer); request.current?.abort(); };
   }, [refresh, scope]);
 

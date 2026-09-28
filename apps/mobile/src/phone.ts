@@ -1,14 +1,71 @@
-export function normalizePhone(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("+")) return `+${trimmed.slice(1).replace(/\D/g, "")}`;
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.startsWith("00")) return `+${digits.slice(2)}`;
-  if (digits.startsWith("0")) return `+32${digits.slice(1)}`;
-  return digits ? `+32${digits}` : "";
+export type PhoneCountry = "BE" | "FR" | "GB" | "US";
+
+export const phoneCountries: { code: PhoneCountry; name: string; callingCode: string; minNationalLength: number; maxNationalLength: number }[] = [
+  { code: "BE", name: "Belgique", callingCode: "+32", minNationalLength: 8, maxNationalLength: 10 },
+  { code: "FR", name: "France", callingCode: "+33", minNationalLength: 9, maxNationalLength: 9 },
+  { code: "GB", name: "Royaume-Uni", callingCode: "+44", minNationalLength: 9, maxNationalLength: 10 },
+  { code: "US", name: "États-Unis", callingCode: "+1", minNationalLength: 10, maxNationalLength: 10 },
+];
+
+const e164Pattern = /^\+[1-9]\d{7,14}$/;
+
+function findCountryByCallingCode(digits: string) {
+  return [...phoneCountries].sort((left, right) => right.callingCode.length - left.callingCode.length)
+    .find((country) => digits.startsWith(country.callingCode.slice(1)));
 }
 
-export function isDialableNumber(value: string): boolean {
-  return /^\+?[\d\s().-]+$/.test(value.trim()) && /^\+[1-9]\d{7,14}$/.test(normalizePhone(value));
+function hasPlausibleNationalLength(country: (typeof phoneCountries)[number], digits: string) {
+  const nationalLength = digits.length - country.callingCode.length + 1;
+  return nationalLength >= country.minNationalLength && nationalLength <= country.maxNationalLength;
+}
+
+/** Infer a country from an international prefix, or a complete unprefixed E.164 number. */
+export function getPhoneCountry(value: string): PhoneCountry | null {
+  const trimmed = value.trim();
+  const explicitInternational = trimmed.startsWith("+") || trimmed.startsWith("00");
+  const digits = trimmed.replace(/\D/g, "").replace(/^00/, "");
+  const country = findCountryByCallingCode(digits);
+  if (!country) return null;
+  if (explicitInternational) return country.code;
+  return hasPlausibleNationalLength(country, digits) ? country.code : null;
+}
+
+export function normalizePhone(value: string, defaultCountry: PhoneCountry = "BE"): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const compact = trimmed.replace(/[\s().-]/g, "");
+  let candidate: string;
+  if (compact.startsWith("+")) candidate = `+${compact.slice(1).replace(/\D/g, "")}`;
+  else if (compact.startsWith("00")) candidate = `+${compact.slice(2).replace(/\D/g, "")}`;
+  else {
+    const digits = compact.replace(/\D/g, "");
+    const detectedCountry = getPhoneCountry(digits);
+    if (detectedCountry) candidate = `+${digits}`;
+    else {
+      const country = phoneCountries.find((item) => item.code === defaultCountry) ?? phoneCountries[0]!;
+      const callingCode = country.callingCode.slice(1);
+      let nationalNumber = digits;
+      if (country.code === "US" && digits.length === 11 && digits.startsWith("1")) candidate = `+${digits}`;
+      else {
+        if (country.code !== "US" && nationalNumber.startsWith("0")) nationalNumber = nationalNumber.slice(1);
+        candidate = `+${callingCode}${nationalNumber}`;
+      }
+    }
+  }
+
+  for (const country of phoneCountries) {
+    const callingCode = country.callingCode;
+    if (country.code !== "US" && candidate.startsWith(`${callingCode}0`)) {
+      candidate = `${callingCode}${candidate.slice(callingCode.length + 1)}`;
+      break;
+    }
+  }
+  return candidate;
+}
+
+export function isDialableNumber(value: string, defaultCountry: PhoneCountry = "BE"): boolean {
+  return /^[+]?[\d\s().-]+$/.test(value.trim()) && e164Pattern.test(normalizePhone(value, defaultCountry));
 }
 
 export function editDialNumber(value: string, selection: { start: number; end: number }, digit: string | null) {

@@ -9,12 +9,12 @@ import { allowedNumber, ensureWorkspace, provisionQueue, type CenterProvider } f
 import { voiceCenterRuntime, isOpen, type VoiceSession } from "./call-center-voice.js";
 import { isActiveOrganizationAdmin } from "./repositories/access.js";
 
-export function registerCallCenter(app: FastifyInstance, service: SupabaseClient<Database> | null, provider: CenterProvider | null, config: AppConfig, validate: (request: FastifyRequest) => boolean) {
+export function registerCallCenter(app: FastifyInstance, service: SupabaseClient<Database> | null, provider: CenterProvider | null, config: AppConfig, validate: (request: FastifyRequest) => boolean, startAutomaticTranscription?: (callId: string, providerSid: string, request: FastifyRequest) => Promise<void>) {
   if (!service) {
     app.get("/v1/organizations/:orgId/center", async (_request,reply) => reply.code(503).send({ code:"center_unavailable",message:"La clé serveur Supabase n’est pas configurée." }));
     return { inbound: async (_routing: unknown, _body: Record<string,string>) => null as string | null };
   }
-  const db = centerStore(service), runtime = voiceCenterRuntime(db,provider,config), base = config.API_PUBLIC_URL.replace(/\/$/,"");
+  const db = centerStore(service), runtime = voiceCenterRuntime(db,provider,config,startAutomaticTranscription), base = config.API_PUBLIC_URL.replace(/\/$/,"");
   const root = "/v1/organizations/:orgId/center";
   type Params = { orgId: string; id?: string };
   async function scope(request: FastifyRequest<{ Params:Params }>, reply: FastifyReply, admin = true) {
@@ -294,6 +294,7 @@ export function registerCallCenter(app: FastifyInstance, service: SupabaseClient
       if(body.CallStatus==="in-progress"){
         if (provider) await provider.calls(session.callSid).update({timeLimit:config.MAX_ACTIVE_CALL_SECONDS});
         checked(await db.from("calls").update({status:"answered",answered_at:new Date().toISOString()}).eq("organization_id",session.orgId).eq("id",session.callId).is("ended_at",null));
+        if (body.CallSid) await startAutomaticTranscription?.(session.callId, body.CallSid, request);
         checked(await db.from("call_reservations").update({expires_at:new Date(Date.now()+config.MAX_ACTIVE_CALL_SECONDS*1000).toISOString()}).eq("call_id",session.callId).eq("routing_reservation_sid",body.reservation??"").eq("status","active"));
       }
       if (["completed","busy","no-answer","failed","canceled"].includes(body.CallStatus??"")) checked(await db.from("call_reservations").update({status:"released",expires_at:new Date().toISOString()}).eq("organization_id",session.orgId).eq("call_id",session.callId).eq("routing_reservation_sid",body.reservation??"").eq("status","active"));

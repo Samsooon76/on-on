@@ -1,13 +1,9 @@
 import type { Session } from "@supabase/supabase-js";
 import { apiBase, supabase } from "./backend";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Admin } from "./Admin";
-import { Statistics } from "./Statistics";
-import { McpConsent } from "./McpIntegrations";
-import { Settings, type LineAssignment, type DeviceRecord } from "./Settings";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DeferredContent } from "./DeferredContent";
+import type { LineAssignment, DeviceRecord } from "./Settings";
 import { settingsTabFromSearch } from "./settings-navigation";
-import { CallCenter, QueuePresence } from "./CallCenter";
-import { NumberPurchase } from "./NumberPurchase";
 import webPackage from "../package.json";
 import { SidebarSimple, TextAlignLeft, ArrowClockwise, ArrowRight, ChartBar, Headset, ShieldCheck, Lightning, ChatCircle, GearSix, Phone, Plus, Users, WarningCircle, X } from "@phosphor-icons/react";
 import { Conversations } from "./Conversations";
@@ -17,7 +13,6 @@ import { CallTranscript } from "./CallTranscript";
 import type { TranscriptTarget } from "@onoff/api-client";
 import { CallDialog, NewConversation } from "./ConversationDialogs";
 import { CallCreateActions, type CallActionContext } from "./CallCreateActions";
-import { CallFollowups } from "./CallFollowups";
 import { Avatar, EmptyState, Modal } from "./ui";
 import { buildInbox, formatPhone, phoneKey, type Contact, type CallRecord, type Conversation, type MessageRecord } from "./conversation-model";
 import { normalizePhoneNumber, type ServiceStatus } from "@onoff/contracts";
@@ -27,7 +22,17 @@ import { ApiClientError, createApiClient, getSmsSegmentInfo } from "@onoff/api-c
 import { createVoiceClient, type VoiceEvent } from "@onoff/voice-web";
 import type { VoiceClient } from "@onoff/voice-contract";
 
+const Admin = lazy(() => import("./Admin").then(module => ({ default: module.Admin })));
+const Statistics = lazy(() => import("./Statistics").then(module => ({ default: module.Statistics })));
+const Settings = lazy(() => import("./Settings").then(module => ({ default: module.Settings })));
+const McpConsent = lazy(() => import("./McpIntegrations").then(module => ({ default: module.McpConsent })));
+const CallCenter = lazy(() => import("./CallCenter").then(module => ({ default: module.CallCenter })));
+const QueuePresence = lazy(() => import("./QueuePresence").then(module => ({ default: module.QueuePresence })));
+const NumberPurchase = lazy(() => import("./NumberPurchase").then(module => ({ default: module.NumberPurchase })));
+const CallFollowups = lazy(() => import("./CallFollowups").then(module => ({ default: module.CallFollowups })));
+
 type Organization = { organization_id: string; role: "admin" | "member"; organizations: { id: string; name: string } | null };
+type PendingSms = { message_id: string; organization_id: string; conversation_id: string; line_id: string; destination: string; body: string; idempotency_key: string };
 type VoiceDiagnosticEvent = "voice_registration_failed" | "history_refresh_succeeded" | "history_refresh_failed";
 
 function takeCallDraftFromUrl(): string {
@@ -78,6 +83,7 @@ export default function App() {
   const [messageReload, setMessageReload] = useState(0);
   const drafts = useRef<Record<string, string>>({});
   const workspaceRequest = useRef(0);
+  const workspaceSelection = useRef({ organizationId: "", lineId: "" });
   const historyScope = useRef("");
   const historyExpanded = useRef(false);
   const smsSubmitting = useRef(false);
@@ -466,9 +472,10 @@ export default function App() {
     }
   }
 
-  async function refreshWorkspace(orgId = selectedOrg) {
+  async function refreshWorkspace(orgId = selectedOrg, preferredLineId = selectedLineId) {
     if (!orgId) return;
     const requestVersion = ++workspaceRequest.current;
+    workspaceSelection.current = { organizationId: orgId, lineId: selectedLineId };
     const [lineResponse, deviceResponse] = await Promise.all([
       api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`),
       api<{ items: DeviceRecord[] }>("/v1/devices"),
@@ -476,8 +483,10 @@ export default function App() {
     if (requestVersion !== workspaceRequest.current) return;
     setLines(lineResponse.items);
     setDevices(deviceResponse.items);
-    const assignment = lineResponse.items.find((item) => item.lines?.id === selectedLineId) ?? lineResponse.items.find((item) => item.lines);
+    const assignment = lineResponse.items.find((item) => item.lines?.id === preferredLineId) ?? lineResponse.items.find((item) => item.lines);
     const line = assignment?.lines;
+    // Selecting the line returned by this load must not start the same load again.
+    workspaceSelection.current = { organizationId: orgId, lineId: line?.id ?? "" };
     setSelectedLineId(line?.id ?? "");
     if (line) {
       const [callResponse, conversationResponse] = await Promise.all([
@@ -502,8 +511,8 @@ export default function App() {
     }
   }
 
-  async function restorePendingSmsAttempt(isCurrent: () => boolean = () => true): Promise<void> {
-    const { items } = await api<{ items: Array<{ message_id: string; organization_id: string; conversation_id: string; line_id: string; destination: string; body: string; idempotency_key: string }> }>("/v1/messages/pending");
+  async function restorePendingSmsAttempt(isCurrent: () => boolean = () => true, prefetched?: PendingSms[]): Promise<void> {
+    const items = prefetched ?? (await api<{ items: PendingSms[] }>("/v1/messages/pending")).items;
     if (!isCurrent()) return;
     const pending = items[0];
     if (!pending) return;
@@ -512,7 +521,7 @@ export default function App() {
     setSelectedOrg(pending.organization_id);
     setMessageDestination(pending.destination);
     setMessageBody(pending.body);
-    await refreshWorkspace(pending.organization_id);
+    await refreshWorkspace(pending.organization_id, pending.line_id);
     if (!isCurrent()) return;
     setSelectedLineId(pending.line_id);
     setSelectedConversationId(pending.conversation_id);
@@ -553,17 +562,22 @@ export default function App() {
     let disposed = false;
     setWorkspaceState("loading");
     setSmsRecoveryState("checking");
-    void Promise.all([api<{ items: Organization[] }>("/v1/organizations"), api<ServiceStatus>("/v1/services")])
-      .then(async ([{ items }, status]) => {
+    const pendingRequest = api<{ items: PendingSms[] }>("/v1/messages/pending")
+      .then(result => ({ ...result, ok: true as const }), error => ({ items: [] as PendingSms[], ok: false as const, error }));
+    void Promise.all([api<{ items: Organization[] }>("/v1/organizations"), api<ServiceStatus>("/v1/services"), pendingRequest])
+      .then(async ([{ items }, status, pending]) => {
         if (disposed) return;
         setOrganizations(items);
         setServices(status);
         const next = selectedOrg && items.some((item) => item.organization_id === selectedOrg)
           ? selectedOrg
           : items[0]?.organization_id ?? "";
-        setSelectedOrg(next);
-        if (next) await refreshWorkspace(next);
-        await restorePendingSmsAttempt(() => !disposed);
+        if (pending.items.length) await restorePendingSmsAttempt(() => !disposed, pending.items);
+        else {
+          setSelectedOrg(next);
+          if (next) await refreshWorkspace(next);
+        }
+        if (!pending.ok) throw pending.error;
         if (!disposed) {
           setSmsRecoveryState("ready");
           setWorkspaceState("ready");
@@ -582,23 +596,14 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedOrg || !authToken) return;
+    if (workspaceSelection.current.organizationId === selectedOrg && workspaceSelection.current.lineId === selectedLineId) return;
+    const request = workspaceRequest.current + 1;
     setWorkspaceState("loading");
     void refreshWorkspace(selectedOrg)
-      .then(() => setWorkspaceState("ready"))
-      .catch((error: Error) => { setWorkspaceState("error"); setNotice(error.message); });
+      .then(() => { if (request === workspaceRequest.current) setWorkspaceState("ready"); })
+      .catch((error: Error) => { if (request === workspaceRequest.current) { setWorkspaceState("error"); setNotice(error.message); } });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrg]);
-
-
-  useEffect(() => {
-    if (!selectedOrg || !selectedLineId || !authToken) return;
-    setWorkspaceState("loading");
-    void refreshWorkspace(selectedOrg)
-      .then(() => setWorkspaceState("ready"))
-      .catch((error: Error) => { setWorkspaceState("error"); setNotice(error.message); });
-  // refreshWorkspace reads the current bearer token and selected line.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLineId]);
+  }, [selectedOrg, selectedLineId]);
 
   useEffect(() => {
     if (!messageDestination || selectedConversationId) return;
@@ -1113,6 +1118,33 @@ export default function App() {
     }
   }
 
+  // The extension injects this gesture only into the configured application's origin.
+  // URL drafts alone never trigger an outbound call.
+  useEffect(() => {
+    if (!ready || (session && workspaceState === "loading")) return;
+    document.documentElement.setAttribute("data-onoff-call-bridge", "ready");
+    const onExtensionCall = (event: Event) => {
+      const number = normalizePhoneNumber(typeof (event as CustomEvent).detail === "string" ? (event as CustomEvent<string>).detail : "");
+      const respond = (message: string) => window.dispatchEvent(new CustomEvent("onoff:call-result", { detail: message }));
+      if (!number) { respond("Numéro invalide."); return; }
+      if (!session || passwordRecovery) { respond("Connectez-vous à Onoff, puis relancez l’appel depuis l’extension."); return; }
+      if (busy || powerDialerLocked || callSubmitting.current || voiceActivity.current || voiceState !== "idle" || incomingFrom) {
+        respond("Un appel ou une opération est déjà en cours dans Onoff."); return;
+      }
+      if (!canCall && voiceTabOwner && !voiceRegisteredRef.current && services?.voiceEnabled && activeLine?.voice_enabled && activeAssignment?.can_voice) { respond("loading"); return; }
+      setDestination(number);
+      setDialerOpen(true);
+      if (!canCall) { respond("La ligne vocale n’est pas prête. Vérifiez votre ligne dans Onoff, puis réessayez."); return; }
+      respond("started");
+      void startVoiceCall(number).catch((error: unknown) => setNotice(error instanceof Error ? error.message : "Appel impossible."));
+    };
+    window.addEventListener("onoff:call", onExtensionCall);
+    return () => {
+      document.documentElement.removeAttribute("data-onoff-call-bridge");
+      window.removeEventListener("onoff:call", onExtensionCall);
+    };
+  });
+
   if (!ready) return <div className="boot-screen"><span className="brand-mark">o</span><span>Ouverture de votre espace…</span></div>;
 
   if (!session || passwordRecovery) return (
@@ -1133,7 +1165,7 @@ export default function App() {
   );
 
   const authorizationId = new URLSearchParams(window.location.search).get("authorization_id");
-  if (authorizationId) return <McpConsent api={api} authorizationId={authorizationId} organizations={organizations}/>;
+  if (authorizationId) return <DeferredContent fallback={<p role="status">Chargement…</p>}><McpConsent api={api} authorizationId={authorizationId} organizations={organizations}/></DeferredContent>;
   const activeDevices = devices.filter((device) => device.organization_id === selectedOrg);
   const unreadCount = conversations.filter((conversation) => conversation.unread).length;
   const duplicateContact = normalizePhoneNumber(contactPhone) ? contacts.find((contact) => contact.id !== editingContact?.id && contact.contact_phones.some((phone) => phone.phone_number === normalizePhoneNumber(contactPhone))) : null;
@@ -1163,7 +1195,7 @@ export default function App() {
     </aside>
 
     <main className="main-area">
-      {selectedOrg && services?.administrationEnabled && <QueuePresence key={`presence:${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api}/>}
+      <DeferredContent fallback={null}>{selectedOrg && services?.administrationEnabled && <QueuePresence key={`presence:${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api}/>}</DeferredContent>
       <header className="topbar"><div className="topbar-title"><span>{organizationName}</span><span className="breadcrumb-slash" aria-hidden="true">/</span><h1>{sectionTitle}</h1></div><div className="topbar-actions">{voiceState === "active" && providerCallSid && <button className="button button-secondary" onClick={() => setTranscriptTarget({ providerCallSid })}><TextAlignLeft size={17} />Transcription</button>}<button className="icon-button" aria-label="Actualiser l’espace" title="Actualiser" disabled={workspaceState === "loading"} onClick={() => { setAdminRefresh((value) => value + 1); void retryWorkspace(); }}><ArrowClockwise size={18} /></button><button className="button button-secondary" disabled={voiceState === "idle" && !incomingFrom && (!canCall || busy || powerDialerLocked)} onClick={() => openCall()}><Phone size={17} /><span>{voiceState !== "idle" || incomingFrom ? "Appel en cours" : "Nouvel appel"}</span></button></div></header>
       <div className="mobile-line-switch"><label>Votre ligne<select aria-label="Ligne active sur mobile" value={activeLine?.id ?? ""} disabled={voiceState !== "idle" || powerDialerLocked || busy || conversationLocked || !lineOptions.length} onChange={(event) => selectLine(event.target.value)}>{lineOptions.length ? lineOptions.map((item) => <option key={item.lines!.id} value={item.lines!.id}>{formatPhone(item.lines!.phone_number)}</option>) : <option value="">Aucune ligne attribuée</option>}</select></label></div>
       {services && (!services.voiceEnabled || !services.smsEnabled || services.operationsPaused || !services.administrationEnabled) && <div className="app-banner warning" role="status"><WarningCircle size={18}/><span>{services.operationsPaused ? services.pauseMessage : [!services.voiceEnabled && "Appels désactivés.", !services.smsEnabled && "SMS désactivés.", !services.administrationEnabled && "Administration non configurée."].filter(Boolean).join(" ")} {canPurchaseNumber && "La configuration serveur doit être terminée pour activer ces services."}</span></div>}
@@ -1181,6 +1213,7 @@ export default function App() {
         onStart={(number, shouldContinue) => startVoiceCall(number, shouldContinue, true)} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigits={(digits) => voiceClient.current?.sendDigits(digits)}
         subscribe={subscribePowerDialer} onLock={setPowerDialerLocked} api={api} onContactSaved={() => { void directory.refresh(); }}
       />
+      <DeferredContent key={activeTab} fallback={<p role="status">Chargement de la rubrique…</p>}>
       {activeTab === "followups" ? (selectedOrg ? <CallFollowups key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} onCall={callId => setTranscriptTarget({ callId })} /> : <EmptyState icon={<Plus size={26} />} title="Aucun espace sélectionné" />) : activeTab === "statistics" ? (canPurchaseNumber && selectedOrg ? <Statistics key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} api={api} refreshKey={adminRefresh}/> : <EmptyState icon={<ChartBar/>} title="Accès administrateur requis"/>) : activeTab === "powerdialer" ? null : activeTab === "conversations" ? <Conversations
         inbox={inbox} contacts={contacts} number={messageDestination} lineNumber={activeLine?.phone_number ?? ""}
         messages={conversationMessages} body={messageBody} dataState={workspaceState} messagesState={messagesState}
@@ -1217,6 +1250,7 @@ export default function App() {
         onRevokeDevice={(id) => void revokeDevice(id)}
         onReconnect={() => setVoiceRetry((value) => value + 1)}
       />}
+      </DeferredContent>
     </main>
 
     {(voiceState !== "idle" || incomingFrom) && !dialerOpen && !(powerDialerLocked && activeTab === "powerdialer") && <button className="active-call-bar" onClick={() => powerDialerLocked ? setActiveTab("powerdialer") : setDialerOpen(true)}><Phone size={19} /><span>{incomingFrom ? "Appel entrant" : voiceStatus}</span><ArrowRight size={17} /></button>}
@@ -1224,6 +1258,6 @@ export default function App() {
     {transcriptTarget && <Modal title="Tags & transcription de l’appel" className="transcript-modal" onClose={() => setTranscriptTarget(null)}><CallTranscript key={`${session.user.id}:${selectedOrg}:${transcriptTarget.callId ?? transcriptTarget.providerCallSid}`} api={api} loadAudio={loadCallAudio} playbackBlocked={voiceState !== "idle"} target={transcriptTarget} /></Modal>}
     {dialerOpen && <CallDialog ended={callEnded} actions={callContext && selectedOrg ? <CallCreateActions key={`${selectedOrg}:${callContext.key}`} organizationId={selectedOrg} context={callContext} api={api} disabled={!networkOnline} onContactSaved={() => { void directory.refresh(); }} /> : null} transcript={(voiceState === "active" || callEnded) && providerCallSid ? <CallTranscript key={providerCallSid} api={api} loadAudio={loadCallAudio} playbackBlocked={voiceState !== "idle"} target={{ providerCallSid }} remoteName={destinationContact?.display_name ?? "Interlocuteur"} /> : null} number={destination} name={destinationContact?.display_name ?? null} line={activeLine?.phone_number ?? "non attribuée"} status={voiceStatus} state={voiceState} incoming={incomingFrom} muted={muted} enabled={canCall} busy={busy} onNumber={setDestination} onClose={() => setDialerOpen(false)} onCall={() => void startVoiceCall().catch((error: unknown) => setNotice(error instanceof Error ? error.message : "Appel impossible."))} onAccept={() => voiceClient.current?.acceptCall()} onReject={() => voiceClient.current?.rejectCall()} onHangup={() => voiceClient.current?.hangUp()} onMute={() => voiceClient.current?.setMuted(!muted)} onDigit={(digit) => voiceClient.current?.sendDigits(digit)} />}
     {contactEditorOpen && <Modal title={editingContact ? "Modifier le contact" : "Ajouter un contact"} onClose={() => setContactEditorOpen(false)} busy={busy}><form className="contact-form" onSubmit={createContact}><label className="field-label">Nom du contact<input autoFocus value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Prénom Nom" required maxLength={120} /></label><label className="field-label">Téléphone<input inputMode="tel" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} placeholder="+33 6 12 34 56 78" /></label>{duplicateContact && <p className="inline-warning" role="status">Ce numéro est déjà associé à {duplicateContact.display_name}.</p>}{editingContact && editingContact.contact_phones.length > 1 && <p className="form-note">Autres numéros conservés : {editingContact.contact_phones.slice(1).map(phone => formatPhone(phone.phone_number)).join(", ")}</p>}<label className="field-label">Email <span className="optional-label">(facultatif)</span><input type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="nom@entreprise.com" /></label>{contactFormError && <p className="form-error" role="alert">{contactFormError}</p>}<div className="modal-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={() => setContactEditorOpen(false)}>Annuler</button><button className="button button-primary" disabled={busy}>{busy ? "Enregistrement…" : "Enregistrer"}</button></div></form></Modal>}
-    {numberPurchaseOpen && selectedOrg && <NumberPurchase key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} email={session.user.email ?? "votre compte"} api={api} onClose={() => setNumberPurchaseOpen(false)} onPurchased={async (lineId) => { await refreshWorkspace(selectedOrg); setSelectedLineId(lineId); setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); if (activeTab === "admin") { setAdminRefresh((value) => value + 1); } else { setActiveTab("conversations"); setDialerOpen(true); } setNumberPurchaseOpen(false); setNotice("Votre nouvelle ligne est prête."); }} />}
+    <DeferredContent key={String(numberPurchaseOpen)} onClose={() => setNumberPurchaseOpen(false)} fallback={<p role="status">Chargement des numéros…</p>}>{numberPurchaseOpen && selectedOrg && <NumberPurchase key={`${session.user.id}:${selectedOrg}`} organizationId={selectedOrg} userId={session.user.id} email={session.user.email ?? "votre compte"} api={api} onClose={() => setNumberPurchaseOpen(false)} onPurchased={async (lineId) => { await refreshWorkspace(selectedOrg); setSelectedLineId(lineId); setMessageDestination(""); setSelectedConversationId(""); setMessageBody(""); if (activeTab === "admin") { setAdminRefresh((value) => value + 1); } else { setActiveTab("conversations"); setDialerOpen(true); } setNumberPurchaseOpen(false); setNotice("Votre nouvelle ligne est prête."); }} />}</DeferredContent>
   </div>;
 }

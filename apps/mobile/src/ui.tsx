@@ -45,10 +45,6 @@ export function ActionButton({ label, onPress, disabled = false, quiet = false, 
   return <Touch onPress={onPress} disabled={disabled || loading} style={[styles.button, quiet && styles.buttonQuiet]}>{loading ? <ActivityIndicator color={quiet ? palette.accent : palette.white} /> : icon ? <Icon name={icon} size={19} color={quiet ? palette.accent : palette.white} /> : null}<Text style={[styles.buttonLabel, quiet && styles.buttonLabelQuiet]}>{label}</Text></Touch>;
 }
 
-export function SmallButton({ label, onPress, quiet = false, danger = false }: { label: string; onPress: () => void; quiet?: boolean; danger?: boolean }) {
-  return <Touch onPress={onPress} style={[styles.smallButton, quiet && styles.buttonQuiet, danger && styles.buttonDanger]}><Text style={[styles.smallButtonText, quiet && styles.buttonLabelQuiet, danger && styles.buttonLabel]}>{label}</Text></Touch>;
-}
-
 export function Card({ children }: { children: ReactNode }) { return <View style={styles.card}>{children}</View>; }
 export function SectionTitle({ title, eyebrow }: { title: string; eyebrow?: string }) { return <View style={styles.sectionTitle}>{eyebrow && <Text style={styles.eyebrow}>{eyebrow}</Text>}<Text style={styles.sectionHeading}>{title}</Text></View>; }
 export function Pill({ label, selected, disabled = false, onPress }: { label: string; selected: boolean; disabled?: boolean; onPress: () => void }) {
@@ -114,9 +110,6 @@ export const styles = themedStyles({
   buttonDisabled: { opacity: 0.42 },
   buttonLabel: { color: palette.white, fontSize: 14, fontWeight: "600", flexShrink: 1, textAlign: "center" },
   buttonLabelQuiet: { color: palette.accent },
-  smallButton: { backgroundColor: palette.accent, paddingHorizontal: 12, paddingVertical: 12, borderRadius: 8, minHeight: 44, justifyContent: "center" },
-  smallButtonText: { color: palette.white, fontSize: 13, fontWeight: "500" },
-  buttonDanger: { backgroundColor: palette.red },
   iconButton: { width: 44, height: 44, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "transparent" },
   iconButtonAccent: { backgroundColor: palette.selected },
   hint: { color: palette.muted, fontSize: 13, lineHeight: 20, marginTop: 8 },
@@ -150,12 +143,6 @@ export const styles = themedStyles({
   messageMeta: { color: palette.muted, fontSize: 10, marginTop: 7, textAlign: "right" },
   notice: { marginHorizontal: 22, marginBottom: 12, backgroundColor: palette.redLight, borderRadius: 8, padding: 12, flexDirection: "row", gap: 9, alignItems: "center" },
   noticeText: { color: palette.red, fontSize: 13, lineHeight: 19, flex: 1 },
-  callBanner: { marginHorizontal: 22, marginBottom: 14, backgroundColor: palette.green, borderWidth: 1, borderColor: palette.line, borderRadius: 12, padding: 16, gap: 14 },
-  callBannerTitle: { color: palette.accentDark, fontWeight: "500", fontSize: 16 },
-  callBannerMeta: { color: palette.accent, fontSize: 12, lineHeight: 18, marginTop: 4 },
-  keypad: { alignSelf: "center", width: 232, flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 8 },
-  keypadKey: { width: 70, height: 48, borderRadius: 8, backgroundColor: palette.white, alignItems: "center", justifyContent: "center" },
-  keypadDigit: { color: palette.ink, fontSize: 21, fontWeight: "400" },
   search: { flexDirection: "row", alignItems: "center", gap: 9, backgroundColor: "#F2F2F2CC", borderWidth: 1, borderColor: palette.line, borderRadius: 10, paddingHorizontal: 13, minHeight: 46 },
   searchInput: { flex: 1, fontSize: 14, color: palette.ink, paddingVertical: 12 },
   lineOverview: { padding: 16, flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1, borderColor: palette.line, borderRadius: 12, minHeight: 76, marginBottom: 6, overflow: "hidden", backgroundColor: palette.white },

@@ -10,13 +10,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
 import { TagManager } from "./src/Tags";
 import { CallTranscript } from "./src/CallTranscript";
+import { CallScreen } from "./src/CallScreen";
 import type { TranscriptTarget } from "@onoff/api-client";
 import { Dialer } from "./src/Dialer";
 import { ConversationInbox, ConversationThread } from "./src/Conversations";
 import { mergeRecords } from "./src/conversation-model";
+import { loadLineHistory } from "./src/line-history";
 import { useConversationHistory } from "./src/useConversationHistory";
-import { callStatusLabel, isDialableNumber, isMissedCall, normalizePhone, relativeCallDate } from "./src/phone";
-import { ActionButton, Card, Empty, Icon, IconButton, MotionPreferences, Pill, SearchField, SectionTitle, Sheet, SmallButton, Touch, feedback, palette, styles, type IconName } from "./src/ui";
+import { callStatusLabel, getPhoneCountry, isDialableNumber, isMissedCall, normalizePhone, phoneCountries, relativeCallDate } from "./src/phone";
+import { ActionButton, Card, Empty, Icon, IconButton, MotionPreferences, Pill, SearchField, SectionTitle, Sheet, Touch, feedback, palette, styles, type IconName } from "./src/ui";
 import {
   ActivityIndicator,
   Alert,
@@ -50,6 +52,7 @@ const supabase = supabaseUrl && supabaseKey
 
 type Tab = "calls" | "contacts" | "conversations" | "settings";
 type Organization = { organization_id: string; role: "admin" | "member"; organizations: { id: string; name: string } | null };
+type PendingSms = { message_id: string; organization_id: string; conversation_id: string; line_id: string; destination: string; body: string; idempotency_key: string };
 type LineAssignment = { can_voice: boolean; can_sms: boolean; status?: string; lines: { id: string; organization_id: string; phone_number: string; voice_enabled: boolean; sms_enabled: boolean } | null };
 type DeviceRecord = { id: string; organization_id: string; platform: string; label: string; status: string; last_active_at: string | null; created_at: string };
 type VoiceDiagnosticEvent = "voice_registration_failed" | "history_refresh_succeeded" | "history_refresh_failed";
@@ -114,6 +117,8 @@ function MobileApp() {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>("conversations");
   const [destination, setDestination] = useState("");
+  const [callNumber, setCallNumber] = useState("");
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [providerCallSid, setProviderCallSid] = useState("");
   const [transcriptTarget, setTranscriptTarget] = useState<TranscriptTarget | null>(null);
   useEffect(() => { setTranscriptTarget(null); setProviderCallSid(""); }, [session?.user.id, selectedOrg, selectedLineId]);
@@ -138,9 +143,6 @@ function MobileApp() {
   contactSearchRef.current = contactSearch;
   const voiceRef = useRef<NativeVoiceClient | null>(null);
   const smsSegmentInfo = getSmsSegmentInfo(messageBody.trim());
-  const duplicateContact = normalizePhone(contactPhone)
-    ? contacts.find((contact) => contact.contact_phones.some((phone) => phone.phone_number === normalizePhone(contactPhone)))
-    : undefined;
   const deviceRef = useRef<DeviceRecord | null>(null);
   const voiceTokenRef = useRef("");
   const voiceRegistrationRef = useRef(false);
@@ -154,13 +156,19 @@ function MobileApp() {
     [lines, selectedLineId],
   );
   const activeLine = activeAssignment?.lines ?? null;
+  const defaultPhoneCountry = getPhoneCountry(activeLine?.phone_number ?? "") ?? "BE";
+  const defaultPhoneCallingCode = phoneCountries.find((country) => country.code === defaultPhoneCountry)?.callingCode ?? "+32";
+  const normalizedContactPhone = normalizePhone(contactPhone, defaultPhoneCountry);
+  const duplicateContact = normalizedContactPhone
+    ? contacts.find((contact) => contact.contact_phones.some((phone) => phone.phone_number === normalizedContactPhone))
+    : undefined;
   const api = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
     if (!apiBase) throw new Error("Configurez EXPO_PUBLIC_API_BASE_URL dans apps/mobile/.env.");
     return apiClient.request<T>(path, init);
   }, [apiClient]);
   const inbox = useMemo(() => buildInbox(selectedLineId, conversations, calls), [selectedLineId, conversations, calls]);
-  const selectedThread = inbox.find((thread) => phoneKey(thread.remoteNumber) === phoneKey(normalizePhone(messageDestination)));
-  const matchingContacts = contacts.filter((contact) => contact.contact_phones.some((phone) => phoneKey(phone.phone_number) === phoneKey(normalizePhone(messageDestination))));
+  const selectedThread = inbox.find((thread) => phoneKey(thread.remoteNumber) === phoneKey(normalizePhone(messageDestination, defaultPhoneCountry)));
+  const matchingContacts = contacts.filter((contact) => contact.contact_phones.some((phone) => phoneKey(phone.phone_number) === phoneKey(normalizePhone(messageDestination, defaultPhoneCountry))));
   const selectedConversationContactName = selectedThread?.name ?? (matchingContacts.length === 1 ? matchingContacts[0]?.display_name : null);
   const markConversationRead = useCallback((id: string) => {
     setConversations((current) => current.map((conversation) => conversation.id === id ? { ...conversation, unread: false } : conversation));
@@ -169,6 +177,7 @@ function MobileApp() {
   const historyRefreshRef = useRef(history.refresh);
   historyRefreshRef.current = history.refresh;
   const workspaceRequestRef = useRef(0);
+  const workspaceSelection = useRef({ organizationId: "", lineId: "" });
   const loadedLineRef = useRef("");
   const reportVoiceDiagnostic = useCallback(async (event: VoiceDiagnosticEvent, durationMs?: number): Promise<void> => {
     try {
@@ -184,8 +193,9 @@ function MobileApp() {
   const refreshWorkspace = useCallback(async (orgId: string, preferredLineId?: string) => {
     if (!orgId) return;
     const request = ++workspaceRequestRef.current;
+    workspaceSelection.current = { organizationId: orgId, lineId: selectedLineId };
     const context = { ...workspaceContextRef.current };
-    const isCurrent = () => request === workspaceRequestRef.current && context.organizationId === workspaceContextRef.current.organizationId && context.lineId === workspaceContextRef.current.lineId;
+    const isCurrent = () => request === workspaceRequestRef.current && orgId === workspaceContextRef.current.organizationId && context.lineId === workspaceContextRef.current.lineId;
     const query = contactSearchRef.current;
     const [lineResponse, contactResponse, deviceResponse] = await Promise.all([
       api<{ items: LineAssignment[] }>(`/v1/organizations/${orgId}/lines`),
@@ -207,8 +217,10 @@ function MobileApp() {
       setSelectedConversationId("");
       setMessageComposerVisible(false);
     }
+    // The line selected by this request is already loading; don't reload it in the selection effect.
+    workspaceSelection.current = { organizationId: orgId, lineId: targetLineId };
     setSelectedLineId(targetLineId);
-    if (!targetLineId) {
+    if (!targetLineId || !target) {
       loadedLineRef.current = "";
       setInboxCursors({ calls: null, conversations: null });
       setCalls([]);
@@ -217,20 +229,20 @@ function MobileApp() {
       setMessageComposerVisible(false);
       return;
     }
-    const [callResponse, conversationResponse] = await Promise.all([
-      api<ApiPage<CallRecord>>(`/v1/lines/${targetLineId}/calls?limit=50`),
-      api<ApiPage<Conversation>>(`/v1/lines/${targetLineId}/conversations?limit=50`),
-    ]);
+    const { calls: callResponse, conversations: conversationResponse } = await loadLineHistory(api, targetLineId, target);
     if (request !== workspaceRequestRef.current || orgId !== workspaceContextRef.current.organizationId || (workspaceContextRef.current.lineId && targetLineId !== workspaceContextRef.current.lineId)) return;
     const sameLine = loadedLineRef.current === targetLineId;
     loadedLineRef.current = targetLineId;
-    setCalls((current) => sameLine ? mergeRecords(current, callResponse.items) : callResponse.items);
-    setConversations((current) => sameLine ? mergeRecords(current, conversationResponse.items) : conversationResponse.items);
-    if (!sameLine) setInboxCursors({ calls: callResponse.nextCursor, conversations: conversationResponse.nextCursor });
+    setCalls((current) => sameLine && target.can_voice ? mergeRecords(current, callResponse.items) : callResponse.items);
+    setConversations((current) => sameLine && target.can_sms ? mergeRecords(current, conversationResponse.items) : conversationResponse.items);
+    setInboxCursors((current) => ({
+      calls: target.can_voice ? (sameLine ? current.calls : callResponse.nextCursor) : null,
+      conversations: target.can_sms ? (sameLine ? current.conversations : conversationResponse.nextCursor) : null,
+    }));
   }, [api, selectedLineId]);
 
-  async function restorePendingSmsAttempt(isCurrent: () => boolean = () => true): Promise<void> {
-    const { items } = await api<{ items: Array<{ message_id: string; organization_id: string; conversation_id: string; line_id: string; destination: string; body: string; idempotency_key: string }> }>("/v1/messages/pending");
+  async function restorePendingSmsAttempt(isCurrent: () => boolean = () => true, prefetched?: PendingSms[]): Promise<void> {
+    const items = prefetched ?? (await api<{ items: PendingSms[] }>("/v1/messages/pending")).items;
     if (!isCurrent()) return;
     const pending = items[0];
     if (!pending) return;
@@ -368,21 +380,27 @@ function MobileApp() {
           break;
         case "incoming":
           setIncomingNumber(event.from);
+          setCallNumber(event.from);
+          setConnectedAt(null);
           setCallStatus("ringing");
           break;
-        case "connecting": setProviderCallSid(""); setCallStatus("connecting"); break;
+        case "connecting": setProviderCallSid(""); setIncomingNumber(""); setConnectedAt(null); setCallStatus("connecting"); break;
         case "ringing": setCallStatus("ringing"); break;
         case "active":
           setProviderCallSid(event.providerCallSid ?? "");
+          setConnectedAt((current) => current ?? Date.now());
           setIncomingNumber(""); setCallStatus("active");
           break;
         case "reconnected":
           setIncomingNumber("");
+          setConnectedAt((current) => current ?? Date.now());
           setCallStatus("active");
           break;
         case "reconnecting": setCallStatus("reconnecting"); break;
         case "ended":
           setIncomingNumber("");
+          setCallNumber("");
+          setConnectedAt(null);
           setCallStatus("idle");
           setMuted(false);
           setKeypadVisible(false);
@@ -426,16 +444,24 @@ function MobileApp() {
     let cancelled = false;
     setWorkspaceLoading(true);
     setSmsRecoveryState("checking");
+    const pendingRequest = api<{ items: PendingSms[] }>("/v1/messages/pending")
+      .then(result => ({ ...result, ok: true as const }), error => ({ items: [] as PendingSms[], ok: false as const, error }));
     void (async () => {
-      const { items } = await api<{ items: Organization[] }>("/v1/organizations");
+      const [{ items }, pending] = await Promise.all([
+        api<{ items: Organization[] }>("/v1/organizations"),
+        pendingRequest,
+      ]);
       if (cancelled) return;
       setOrganizations(items);
       const next = selectedOrg && items.some((item) => item.organization_id === selectedOrg)
         ? selectedOrg
         : items[0]?.organization_id ?? "";
-      setSelectedOrg(next);
-      if (next) await refreshWorkspace(next);
-      await restorePendingSmsAttempt(() => !cancelled);
+      if (pending.items.length) await restorePendingSmsAttempt(() => !cancelled, pending.items);
+      else {
+        setSelectedOrg(next);
+        if (next) await refreshWorkspace(next);
+      }
+      if (!pending.ok) throw pending.error;
       if (!cancelled) setSmsRecoveryState("ready");
     })().catch(() => {
       if (cancelled) return;
@@ -449,22 +475,20 @@ function MobileApp() {
 
   useEffect(() => {
     if (!authToken || !selectedOrg) return;
-    void refreshWorkspace(selectedOrg).catch((error: unknown) => setNotice(friendlyError(error)));
+    if (workspaceSelection.current.organizationId === selectedOrg && workspaceSelection.current.lineId === selectedLineId) return;
+    const request = workspaceRequestRef.current + 1;
+    setWorkspaceLoading(true);
+    void refreshWorkspace(selectedOrg, selectedLineId)
+      .catch((error: unknown) => { if (request === workspaceRequestRef.current) setNotice(friendlyError(error)); })
+      .finally(() => { if (request === workspaceRequestRef.current) setWorkspaceLoading(false); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, selectedOrg]);
+  }, [selectedOrg, selectedLineId]);
 
   useEffect(() => {
     if (messageComposerVisible && selectedThread?.smsConversationId && !selectedConversationId) {
       setSelectedConversationId(selectedThread.smsConversationId);
     }
   }, [messageComposerVisible, selectedThread?.smsConversationId, selectedConversationId]);
-
-  useEffect(() => {
-    if (!authToken || !selectedOrg || !selectedLineId) return;
-    void refreshWorkspace(selectedOrg, selectedLineId).catch((error: unknown) => setNotice(friendlyError(error)));
-  // Reload the selected line immediately, even when no realtime event is emitted.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLineId]);
 
   useEffect(() => {
     if (!authToken || !selectedOrg) return;
@@ -721,12 +745,15 @@ function MobileApp() {
   }
 
   async function startCall(number = destination) {
-    const normalized = normalizePhone(number);
+    const normalized = normalizePhone(number, defaultPhoneCountry);
     if (busy || callStatus !== "idle") return;
-    if (!activeLine?.voice_enabled || !activeAssignment?.can_voice || !deviceRef.current || !isDialableNumber(number)) {
-      setNotice("Choisissez une ligne vocale et un numéro au format international.");
+    if (!activeLine?.voice_enabled || !activeAssignment?.can_voice || !deviceRef.current || !isDialableNumber(number, defaultPhoneCountry)) {
+      setNotice("Choisissez une ligne vocale et vérifiez le numéro saisi.");
       return;
     }
+    setDestination(normalized);
+    setCallNumber(normalized);
+    setConnectedAt(null);
     setBusy(true);
     let unusedIntentId: string | null = null;
     try {
@@ -776,10 +803,10 @@ function MobileApp() {
   }
 
   async function saveContact() {
-    const phone = normalizePhone(contactPhone);
+    const phone = normalizePhone(contactPhone, defaultPhoneCountry);
     if (!selectedOrg || !contactName.trim()) return;
-    if (contactPhone && !/^\+[1-9]\d{7,14}$/.test(phone)) {
-      setNotice("Le numéro doit être au format international, par exemple +32470000000.");
+    if (contactPhone && !isDialableNumber(contactPhone, defaultPhoneCountry)) {
+      setNotice(`Vérifiez le numéro avec l’indicatif ${defaultPhoneCallingCode}.`);
       return;
     }
     setBusy(true);
@@ -818,9 +845,9 @@ function MobileApp() {
       setNotice("Cette ligne n’a pas de permission SMS.");
       return;
     }
-    const normalized = normalizePhone(messageDestination);
-    if (!isDialableNumber(messageDestination) || !messageBody.trim()) {
-      setNotice("Saisissez un numéro international et un message.");
+    const normalized = normalizePhone(messageDestination, defaultPhoneCountry);
+    if (!isDialableNumber(messageDestination, defaultPhoneCountry) || !messageBody.trim()) {
+      setNotice("Vérifiez le numéro du destinataire et le contenu du message.");
       return;
     }
     const requestBody = { organizationId: selectedOrg, lineId: activeLine.id, destination: normalized, body: messageBody.trim() };
@@ -938,6 +965,7 @@ function MobileApp() {
       return;
     }
     if (lineId === selectedLineId) return;
+    setNotice("");
     loadedLineRef.current = "";
     workspaceRequestRef.current += 1;
     setInboxCursors({ calls: null, conversations: null });
@@ -956,6 +984,11 @@ function MobileApp() {
     const query = callSearch.trim().toLocaleLowerCase();
     return calls.filter((call) => (callFilter === "all" || isMissedCall(call)) && (!query || `${call.remoteContactName ?? ""} ${call.remote_number}`.toLocaleLowerCase().includes(query))).sort((a, b) => b.created_at.localeCompare(a.created_at));
   }, [calls, callSearch, callFilter]);
+  const callContactName = useMemo(() => {
+    if (!callNumber) return "";
+    return contacts.find((contact) => contact.contact_phones.some((phone) => normalizePhone(phone.phone_number) === normalizePhone(callNumber)))?.display_name ?? "";
+  }, [callNumber, contacts]);
+  const callAudioLabel = audioDevices.find((device) => device.id === selectedAudioDevice)?.name ?? "Appareil";
   const missedCount = calls.filter(isMissedCall).length;
   const unreadCount = conversations.filter((conversation) => conversation.unread).length;
   const canCall = Boolean(activeLine?.voice_enabled && activeAssignment?.can_voice && callStatus === "idle");
@@ -992,8 +1025,8 @@ function MobileApp() {
     setLoadingMore(true);
     try {
       const [callPage, conversationPage] = await Promise.all([
-        inboxCursors.calls ? api<ApiPage<CallRecord>>(`/v1/lines/${lineId}/calls?limit=50&cursor=${encodeURIComponent(inboxCursors.calls)}`) : null,
-        inboxCursors.conversations ? api<ApiPage<Conversation>>(`/v1/lines/${lineId}/conversations?limit=50&cursor=${encodeURIComponent(inboxCursors.conversations)}`) : null,
+        activeAssignment?.can_voice && inboxCursors.calls ? api<ApiPage<CallRecord>>(`/v1/lines/${lineId}/calls?limit=50&cursor=${encodeURIComponent(inboxCursors.calls)}`) : null,
+        activeAssignment?.can_sms && inboxCursors.conversations ? api<ApiPage<Conversation>>(`/v1/lines/${lineId}/conversations?limit=50&cursor=${encodeURIComponent(inboxCursors.conversations)}`) : null,
       ]);
       if (lineId !== workspaceContextRef.current.lineId || request !== workspaceRequestRef.current) return;
       if (callPage) setCalls((current) => mergeRecords(callPage.items, current));
@@ -1004,7 +1037,7 @@ function MobileApp() {
   }
 
   function newMessage(number = "") {
-    const thread = inbox.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalizePhone(number)));
+    const thread = inbox.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalizePhone(number, defaultPhoneCountry)));
     openConversation(thread ?? { remoteNumber: number, smsConversationId: null }, !number);
   }
 
@@ -1015,7 +1048,7 @@ function MobileApp() {
       else setNotice("Attendez la vérification des envois précédents avant d’ouvrir une conversation.");
       return;
     }
-    const sameRecipient = Boolean(conversation.remoteNumber) && phoneKey(normalizePhone(messageDestination)) === phoneKey(normalizePhone(conversation.remoteNumber));
+    const sameRecipient = Boolean(conversation.remoteNumber) && phoneKey(normalizePhone(messageDestination, defaultPhoneCountry)) === phoneKey(normalizePhone(conversation.remoteNumber, defaultPhoneCountry));
     const open = () => {
       if (!sameRecipient) setMessageBody("");
       setSelectedConversationId(conversation.smsConversationId ?? "");
@@ -1036,7 +1069,7 @@ function MobileApp() {
 
   function changeMessageDestination(number: string) {
     setMessageDestination(number);
-    const thread = inbox.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalizePhone(number)));
+    const thread = inbox.find((item) => phoneKey(item.remoteNumber) === phoneKey(normalizePhone(number, defaultPhoneCountry)));
     setSelectedConversationId(thread?.smsConversationId ?? "");
   }
 
@@ -1086,11 +1119,33 @@ function MobileApp() {
   return <SafeAreaView style={styles.app} edges={["top", "left", "right"]}>
     <AmbientBackground />
     <StatusBar barStyle="dark-content" />
+    {callStatus !== "idle" ? <CallScreen
+      status={callStatus}
+      incoming={Boolean(incomingNumber)}
+      name={callContactName}
+      number={callNumber}
+      connectedAt={connectedAt}
+      muted={muted}
+      keypadVisible={keypadVisible}
+      audioLabel={callAudioLabel}
+      notice={notice}
+      canTranscribe={Boolean(providerCallSid)}
+      bottomInset={insets.bottom}
+      onMute={() => voiceRef.current?.setMuted(!muted)}
+      onKeypad={() => setKeypadVisible((shown) => !shown)}
+      onAudio={() => void changeAudioRoute()}
+      onDigit={(digit) => voiceRef.current?.sendDigits(digit)}
+      onTranscribe={() => setTranscriptTarget({ providerCallSid })}
+      onAccept={() => voiceRef.current?.acceptCall()}
+      onDecline={() => voiceRef.current?.rejectCall()}
+      onHangup={() => voiceRef.current?.hangUp()}
+      onDismissNotice={() => setNotice("")}
+    /> : <>
     <View style={styles.header}>
       {isThread && <IconButton icon="chevron-back" label="Revenir aux conversations" onPress={() => { Keyboard.dismiss(); setMessageComposerVisible(false); }} />}
       <View style={styles.rowCopy}><Text style={styles.headerBrand}>ONOFF BUSINESS</Text><Text accessibilityRole="header" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={[styles.headerTitle, isThread && { fontSize: 19, lineHeight: 26, letterSpacing: -0.3 }]}>{tabTitle}</Text></View>
       <View style={styles.headerActions}>
-        {isThread && <IconButton icon="call-outline" label="Appeler cet interlocuteur" tone="accent" disabled={!canCall || busy || !isDialableNumber(messageDestination)} onPress={() => openDialer(messageDestination)} />}
+        {isThread && <IconButton icon="call-outline" label="Appeler cet interlocuteur" tone="accent" disabled={!canCall || busy || !isDialableNumber(messageDestination, defaultPhoneCountry)} onPress={() => openDialer(messageDestination)} />}
         {activeTab === "contacts" && <IconButton icon="add" label="Ajouter un contact" tone="accent" onPress={() => { setNotice(""); setContactFormVisible(true); }} />}
         {activeTab === "conversations" && !isThread && <IconButton icon="create-outline" label="Nouvelle conversation" tone="accent" onPress={() => newMessage()} disabled={smsLocked} />}
         {!isThread && activeTab !== "contacts" && <Touch style={styles.avatar} accessibilityLabel="Ouvrir les réglages du compte" onPress={() => changeTab("settings")}><View style={styles.avatarInitial}><Text style={styles.avatarText}>{session.user.email?.slice(0, 1).toUpperCase() ?? "O"}</Text></View></Touch>}
@@ -1101,18 +1156,6 @@ function MobileApp() {
       {lines.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pills}>{lines.filter((item) => item.lines).map((item) => <Pill key={item.lines!.id} selected={activeLine?.id === item.lines!.id} disabled={callStatus !== "idle" || smsLocked} label={item.lines!.phone_number} onPress={() => selectLine(item.lines!.id)} />)}</ScrollView>}
     </View>}
     {!!notice && !dialerVisible && !contactFormVisible && <Pressable accessibilityRole="button" accessibilityLabel={`${notice}. Fermer le message`} onPress={() => setNotice("")} style={styles.notice}><Icon name="information-circle-outline" size={19} color={palette.red} /><Text accessibilityLiveRegion="polite" style={styles.noticeText}>{notice}</Text><Icon name="close" size={17} color={palette.red} /></Pressable>}
-    {callStatus !== "idle" && <View style={styles.callBanner}>
-      <View style={styles.actionRow}><Icon name="call-outline" color={palette.accent} /><View style={styles.rowCopy}><Text style={styles.callBannerTitle}>{incomingNumber ? `Appel de ${incomingNumber}` : callStatus === "active" ? "Appel en cours" : callStatus === "reconnecting" ? "Reconnexion…" : "Connexion en cours…"}</Text><Text style={styles.callBannerMeta}>{voiceStatus}{selectedAudioDevice ? ` · ${audioDevices.find((device) => device.id === selectedAudioDevice)?.name ?? "Audio"}` : ""}</Text></View></View>
-      <View style={styles.actionRow}>{incomingNumber ? <><SmallButton label="Répondre" quiet onPress={() => voiceRef.current?.acceptCall()} /><SmallButton label="Refuser" danger onPress={() => voiceRef.current?.rejectCall()} /></> : <>
-        <SmallButton label={muted ? "Réactiver le micro" : "Muet"} quiet onPress={() => voiceRef.current?.setMuted(!muted)} />
-        <SmallButton label="Clavier" quiet onPress={() => setKeypadVisible((shown) => !shown)} />
-        <SmallButton label="Audio" quiet onPress={() => void changeAudioRoute()} />
-        <SmallButton label="Raccrocher" danger onPress={() => voiceRef.current?.hangUp()} />
-      </>}</View>
-      {!!providerCallSid && callStatus === "active" && <Touch accessibilityLabel="Voir la transcription en direct" style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 44, paddingTop: 8 }} onPress={() => setTranscriptTarget({ providerCallSid })}><Icon name="document-text-outline" size={18} color={palette.accent} /><Text style={{ color: palette.accent, fontSize: 13, flex: 1 }}>Transcription en direct</Text><Icon name="chevron-forward" size={16} color={palette.accent} /></Touch>}
-      {keypadVisible && !incomingNumber && <View style={styles.keypad}>{["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => <Touch key={digit} accessibilityLabel={`Tonalité ${digit}`} style={styles.keypadKey} onPress={() => { feedback(); voiceRef.current?.sendDigits(digit); }}><Text style={styles.keypadDigit}>{digit}</Text></Touch>)}</View>}
-    </View>}
-    {transcriptTarget && <CallTranscript key={`${session.user.id}:${selectedOrg}:${transcriptTarget.callId ?? transcriptTarget.providerCallSid}`} api={api} getAudioSource={getCallAudioSource} playbackBlocked={callStatus !== "idle"} target={transcriptTarget} onClose={() => setTranscriptTarget(null)} onHangup={callStatus === "active" || callStatus === "reconnecting" ? () => voiceRef.current?.hangUp() : undefined} />}
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={insets.top + (isThread ? 90 : 100)}>
       {activeTab === "calls" && <FlatList
         data={visibleCalls} keyExtractor={(item) => item.id} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}
@@ -1153,6 +1196,7 @@ function MobileApp() {
         segments={smsSegmentInfo.segments} onSend={() => void sendMessage()} onCall={() => openDialer(messageDestination)}
         onTranscript={(callId) => setTranscriptTarget({ callId })}
         bottomInset={keyboardVisible ? 0 : insets.bottom}
+        defaultPhoneCountry={defaultPhoneCountry}
       />}
       {activeTab === "settings" && <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.settingsAccount}><View style={styles.settingsAvatar}><Text style={styles.settingsInitial}>{session.user.email?.slice(0, 1).toUpperCase() ?? "O"}</Text></View><View style={styles.rowCopy}><Text style={styles.rowTitle} numberOfLines={1}>{session.user.email}</Text><Text style={styles.rowMeta}>{organizations.find((item) => item.organization_id === selectedOrg)?.organizations?.name ?? "Votre compte professionnel"}</Text></View></View>
@@ -1179,7 +1223,7 @@ function MobileApp() {
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}><ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.hint}>Un contact partagé avec toute votre équipe.</Text>
         <View><Text style={styles.fieldLabel}>Nom</Text><TextInput accessibilityLabel="Nom du contact" style={styles.input} placeholder="Prénom et nom" placeholderTextColor={palette.muted} value={contactName} onChangeText={setContactName} autoComplete="name" maxLength={120} />
-          <Text style={styles.fieldLabel}>Téléphone</Text><TextInput accessibilityLabel="Téléphone du contact" style={styles.input} placeholder="Numéro international" placeholderTextColor={palette.muted} keyboardType="phone-pad" value={contactPhone} onChangeText={setContactPhone} />
+          <Text style={styles.fieldLabel}>Téléphone</Text><TextInput accessibilityLabel="Téléphone du contact" style={styles.input} placeholder="Numéro local ou international" placeholderTextColor={palette.muted} keyboardType="phone-pad" value={contactPhone} onChangeText={setContactPhone} /><Text style={styles.hint}>Numéro local : indicatif {defaultPhoneCallingCode} ajouté automatiquement.</Text>
           {duplicateContact && <Text style={styles.duplicateWarning}>Ce numéro figure déjà chez {duplicateContact.display_name}. Vérifiez avant d’enregistrer.</Text>}
           <Text style={styles.fieldLabel}>E-mail · facultatif</Text><TextInput accessibilityLabel="E-mail du contact" style={styles.input} placeholder="Adresse e-mail" placeholderTextColor={palette.muted} keyboardType="email-address" autoCapitalize="none" value={contactEmail} onChangeText={setContactEmail} />
         </View>
@@ -1188,5 +1232,7 @@ function MobileApp() {
         {!selectedOrg && <Text style={styles.hint}>Vous devez rejoindre une organisation pour ajouter des contacts.</Text>}
       </ScrollView></KeyboardAvoidingView>
     </Sheet>
+    </>}
+    {transcriptTarget && <CallTranscript key={`${session.user.id}:${selectedOrg}:${transcriptTarget.callId ?? transcriptTarget.providerCallSid}`} api={api} getAudioSource={getCallAudioSource} playbackBlocked={callStatus !== "idle"} target={transcriptTarget} onClose={() => setTranscriptTarget(null)} onHangup={callStatus === "active" || callStatus === "reconnecting" ? () => voiceRef.current?.hangUp() : undefined} />}
   </SafeAreaView>;
 }

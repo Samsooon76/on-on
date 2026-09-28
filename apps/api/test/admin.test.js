@@ -11,14 +11,14 @@ const config=loadConfig({SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUB
 function setup(t, options={}) {
  const state={role:'admin',rpcs:[],created:[],deleted:[],authError:null,rpcError:null,checkData:[],checkError:null, ...options};
  const client={auth:{getUser:async()=>({data:{user:{id:actorId}},error:null}),admin:{createUser:async input=>{state.created.push(input);return {data:{user:state.authError ? null : {id:memberId}},error:state.authError}},deleteUser:async id=>{state.deleted.push(id);return {error:null}}}},
- from(){ const q={select:()=>q,eq:()=>q,limit:()=>q,maybeSingle:async()=>({data:state.role?{role:state.role}:null,error:null}),then:(resolve,reject)=>Promise.resolve({data:state.checkData,error:state.checkError}).then(resolve,reject)};return q;},
+ from(table){ if(table==='transcription_settings') { const q={select:()=>q,eq:()=>q,maybeSingle:async()=>({data:state.setting??null,error:null}),upsert:async value=>{state.setting=value;return {error:null}}};return q; } const q={select:()=>q,eq:()=>q,limit:()=>q,maybeSingle:async()=>({data:state.role?{role:state.role}:null,error:null}),then:(resolve,reject)=>Promise.resolve({data:state.checkData,error:state.checkError}).then(resolve,reject)};return q;},
  rpc:async(name,args)=>{state.rpcs.push({name,args});return {data:state.rpcError ? null : name==='admin_snapshot' ? {members:[],lines:[],assignments:[],audit:[]} : name.includes('inbound') ? state.routing : memberId,error:state.rpcError}}};
  const app=createApp(config,{createSupabaseClient:()=>client});t.after(()=>app.close());return {app,state};
 }
 const member={email:'new@example.test',password:'initial-password-42',displayName:'Camille Martin',role:'member'};
 test('all admin endpoints require authentication and active admin membership',async t=>{
  const {app,state}=setup(t);
- for(const [method,url,payload] of [['GET',base],['POST',`${base}/members`,member],['PATCH',`${base}/members/${memberId}`,{}],['PUT',`${base}/lines/${lineId}/ivr`,{}]]) {
+ for(const [method,url,payload] of [['GET',`${base}/transcription`],['PUT',`${base}/transcription`,{autoStart:true}],['GET',base],['POST',`${base}/members`,member],['PATCH',`${base}/members/${memberId}`,{}],['PUT',`${base}/lines/${lineId}/ivr`,{}]]) {
   assert.equal((await app.inject({method,url,...(payload?{payload}:{})})).statusCode,401);
   for(const role of ['member',null]) {state.role=role;assert.equal((await app.inject({method,url,headers,...(payload?{payload}:{})})).statusCode,403);}
  }
@@ -70,4 +70,17 @@ test('signed IVR webhooks produce bounded DTMF menus and preserve server-side ro
  state.routing={allowed:true,callId:memberId,devices:[{identity:'mobile_member',deviceId:memberId}]};
  const dial=await webhook('/webhooks/twilio/voice/ivr?attempt=1',{...body,Digits:'1'});
  assert.equal(dial.statusCode,200);assert.match(dial.body,/<Identity>mobile_member<\/Identity>/);assert.equal(state.rpcs.at(-1).name,'route_inbound_call');assert.equal(state.rpcs.at(-1).args.p_digits,'1');assert.equal(state.rpcs.at(-1).args.p_attempt,1);
+});
+
+test('admins can persist automatic transcription only for their organization with strict input', async t => {
+ const {app,state}=setup(t);
+ const url=`${base}/transcription`;
+ assert.deepEqual((await app.inject({url,headers})).json(),{autoStart:false});
+ for(const payload of [{autoStart:'true'},{autoStart:true,organization_id:memberId}]) assert.equal((await app.inject({method:'PUT',url,headers,payload})).statusCode,400);
+ assert.equal(state.setting,undefined);
+ assert.equal((await app.inject({method:'PUT',url,headers,payload:{autoStart:true}})).statusCode,200);
+ assert.deepEqual(state.setting,{organization_id:orgId,auto_start:true});
+ assert.deepEqual((await app.inject({url,headers})).json(),{autoStart:true});
+ assert.equal((await app.inject({method:'PUT',url,headers,payload:{autoStart:false}})).statusCode,200);
+ assert.deepEqual((await app.inject({url,headers})).json(),{autoStart:false});
 });
