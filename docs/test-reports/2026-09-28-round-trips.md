@@ -66,5 +66,5 @@ Ligne extrême (60 000 conversations, 180 000 appels, un fil de 20 000 messages)
 ## Non vérifié
 
 - Aucun appel authentifié sur les services déployés, aucune mesure sur iPhone. Les contrôles ont tourné avec le Node 26 de l'environnement (le projet déclare Node 24).
-- La migration n'est pas appliquée à Supabase : à faire avant de déployer l'API (voir la [décision 006](../decisions/006-fewer-round-trips.md)).
+- L'état de Supabase n'a pas été vérifié depuis cette intervention (accès à la production refusé à l'outil). Le propriétaire indique avoir appliqué `20260928210000_conversation_loading_performance`; `20260928224434_conversation_loading_index_friendly` reste à appliquer (voir la [décision 006](../decisions/006-fewer-round-trips.md)).
 - La suite `pnpm test:admin:db` complète échoue déjà sans ces changements sur `call_tags.test.sql` (la même suite passe fichier par fichier); cela n'est pas lié à cette intervention.

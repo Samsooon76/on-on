@@ -17,8 +17,10 @@
 
 ## Ordre de déploiement
 
-1. `pnpm db:migrations:online` puis `pnpm db:push:online` (vérifier le projet affiché) : la migration est additive et l'ancienne API continue de fonctionner.
-2. Déployer API et Web (`main`). L'API dépend des nouvelles fonctions : sans la migration, les écrans concernés répondent 503.
+1. `pnpm db:migrations:online` puis `pnpm db:push:online` (vérifier le projet affiché).
+   - `20260928210000_conversation_loading_performance` est additive; l'ancienne API continue de fonctionner. C'est la seule dont l'API dépend.
+   - `20260928224434_conversation_loading_index_friendly` remplace quatre de ses fonctions par des versions qui ne lisent qu'une page même sur une très grande ligne. Une migration appliquée ne se modifie pas : ces corrections sont donc à part. Elle n'est pas nécessaire à l'exactitude; l'API fonctionne avec ou sans elle.
+2. Déployer API et Web (`main`). Sans la première migration, les écrans concernés répondent 503.
 3. Reconstruire l'application iOS. Les clients sont compatibles avec l'ancienne et la nouvelle API.
 
 Retour arrière : redéployer la version précédente de l'API; les fonctions ajoutées restent inertes.
